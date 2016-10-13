@@ -16,7 +16,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Ridge
 
-from util import Dataset
+from util import Dataset, load_prediction
 
 
 class Xgb(object):
@@ -76,6 +76,19 @@ class Sklearn(object):
         return pd.Series(pred, index=X.index)
 
 
+def load_x(ds, preset):
+    feature_parts = [Dataset.load_part(ds, part) for part in preset.get('features', [])]
+    prediction_parts = [load_prediction(ds, p) for p in preset.get('predictions', [])]
+
+    if 'prediction_transform' in preset:
+        prediction_parts = map(preset['prediction_transform'], prediction_parts)
+
+    return pd.concat(feature_parts + prediction_parts, axis=1)
+
+
+## Main part
+
+
 parser = argparse.ArgumentParser(description='Train model')
 parser.add_argument('preset', type=str, help='model preset (features and hyperparams)')
 
@@ -85,7 +98,7 @@ n_folds = 5
 
 presets = {
     'xgb1': {
-        'feature_parts': ['numeric', 'categorical_encoded'],
+        'features': ['numeric', 'categorical_encoded'],
         'model': Xgb({
             'max_depth': 7,
             'eta': 0.1,
@@ -101,40 +114,47 @@ presets = {
     },
 
     'et1': {
-        'feature_parts': ['numeric', 'categorical_encoded'],
+        'features': ['numeric', 'categorical_encoded'],
         'model': Sklearn(ExtraTreesRegressor(50, n_jobs=-1), transform_y=(np.log, np.exp)),
     },
 
     'rf1': {
-        'feature_parts': ['numeric', 'categorical_encoded'],
+        'features': ['numeric', 'categorical_encoded'],
         'model': Sklearn(RandomForestRegressor(50, n_jobs=-1), transform_y=(np.log, np.exp)),
     },
 
     'lr1': {
-        'feature_parts': ['numeric', 'categorical_dummy'],
+        'features': ['numeric', 'categorical_dummy'],
         'model': Sklearn(Pipeline([('sc', StandardScaler()), ('lr', Ridge(1e-3))]), transform_y=(np.log, np.exp)),
     },
 
     'knn1': {
-        'feature_parts': ['numeric', 'categorical_encoded'],
+        'features': ['numeric', 'categorical_encoded'],
         'model': Sklearn(Pipeline([('sc', StandardScaler()), ('knn', KNeighborsRegressor(5))]), transform_y=(np.log, np.exp)),
-    }
+    },
+
+    'l2_lr': {
+        'predictions': [
+            '20161013-1512-xgb1-1146.11469',
+            '20161013-1606-et1-1227.13876',
+            '20161013-1532-lr1-1290.94745',
+            '20161013-1546-lr1-1250.76315',
+        ],
+        'prediction_transform': np.log,
+        'model': Sklearn(Ridge(), transform_y=(np.log, np.exp)),
+    },
 }
 
 preset = presets[args.preset]
 
 print "Loading train data..."
-train = Dataset.load('train', preset['feature_parts'] + ['loss'])
-train_x = pd.concat([train[part] for part in preset['feature_parts']], axis=1)
-train_y = train['loss']
+train_x = load_x('train', preset)
+train_y = Dataset.load_part('train', 'loss')
 train_p = pd.Series(np.nan, index=train_x.index)
-del train
 
 print "Loading test data..."
-test = Dataset.load('test', preset['feature_parts'])
-test_x = pd.concat([test[part] for part in preset['feature_parts']], axis=1)
+test_x = load_x('test', preset)
 test_p = pd.Series(0.0, index=test_x.index)
-del test
 
 maes = []
 
