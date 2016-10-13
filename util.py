@@ -34,12 +34,12 @@ def load_pickle(filename):
 
 
 def load_prediction(split, name):
-    return pd.read_csv('preds/%s-%s.csv' % (name, split))
+    return pd.read_csv('preds/%s-%s.csv' % (name, split), index_col='id').iloc[:, 0]
 
 
 class Dataset(object):
 
-    parts = ['loss', 'numeric', 'numeric_boxcox', 'categorical', 'categorical_counts', 'categorical_encoded']
+    parts = ['loss', 'numeric', 'numeric_boxcox', 'categorical', 'categorical_counts', 'categorical_encoded', 'categorical_dummy']
 
     @classmethod
     def get_part_features(cls, part_name):
