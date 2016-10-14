@@ -15,18 +15,36 @@ from sklearn.neighbors import KNeighborsRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Ridge
+from sklearn.svm import LinearSVR
+
+from scipy.stats import boxcox
 
 from util import Dataset, load_prediction
 
 
 class Xgb(object):
 
+    default_params = {
+        'objective': 'reg:linear',
+        'eval_metric': 'mae',
+        'silent': 1,
+        'seed': 42,
+        'nthread': -1,
+    }
+
     def __init__(self, params, n_iter=400, transform_y=None):
-        self.params = params
+        self.params = self.default_params.copy()
+
+        for k in params:
+            self.params[k] = params[k]
+
         self.n_iter = n_iter
         self.transform_y = transform_y
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None):
+        y_train = y_train.values
+        y_eval = y_eval.values
+
         if self.transform_y is not None:
             y_tr, y_inv = self.transform_y
 
@@ -37,8 +55,8 @@ class Xgb(object):
         else:
             feval = None
 
-        dtrain = xgb.DMatrix(X_train.values, label=y_train.values)
-        deval = xgb.DMatrix(X_eval.values, label=y_eval.values)
+        dtrain = xgb.DMatrix(X_train.values, label=y_train)
+        deval = xgb.DMatrix(X_eval.values, label=y_eval)
 
         self.model = xgb.train(self.params, dtrain, self.n_iter, [(deval, 'eval'), (dtrain, 'train')], verbose_eval=10, feval=feval)
 
@@ -60,11 +78,13 @@ class Sklearn(object):
         self.transform_y = transform_y
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None):
+        y_train = y_train.values
+
         if self.transform_y is not None:
             y_tr, _ = self.transform_y
             y_train = y_tr(y_train)
 
-        self.model.fit(X_train.values, y_train.values)
+        self.model.fit(X_train.values, y_train)
 
     def predict(self, X):
         pred = self.model.predict(X.values)
@@ -86,6 +106,17 @@ def load_x(ds, preset):
     return pd.concat(feature_parts + prediction_parts, axis=1)
 
 
+norm_y_lambda = 0.7
+
+
+def norm_y(y):
+    return boxcox(np.log1p(y), lmbda=norm_y_lambda)
+
+
+def norm_y_inv(y_bc):
+    return np.expm1((y_bc * norm_y_lambda + 1)**(1/norm_y_lambda))
+
+
 ## Main part
 
 
@@ -102,25 +133,42 @@ presets = {
         'model': Xgb({
             'max_depth': 7,
             'eta': 0.1,
-            'objective': 'reg:linear',
             'colsample_bytree': 0.5,
             'subsample': 0.95,
             'min_child_weight': 5,
-            'eval_metric': 'mae',
-            'silent': 1,
-            'seed': 42,
-            'nthread': 4
-        }, n_iter=400, transform_y=(np.log, np.exp)),
+        }, n_iter=400, transform_y=(norm_y, norm_y_inv)),
+    },
+
+    'xgb2': {
+        'features': ['numeric', 'categorical_counts'],
+        'model': Xgb({
+            'max_depth': 7,
+            'eta': 0.1,
+            'colsample_bytree': 0.5,
+            'subsample': 0.95,
+            'min_child_weight': 5,
+        }, n_iter=400, transform_y=(norm_y, norm_y_inv)),
+    },
+
+    'xgb3': {
+        'features': ['numeric', 'categorical_encoded'],
+        'model': Xgb({
+            'max_depth': 7,
+            'eta': 0.06,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'min_child_weight': 4,
+        }, n_iter=550, transform_y=(norm_y, norm_y_inv)),
     },
 
     'et1': {
         'features': ['numeric', 'categorical_encoded'],
-        'model': Sklearn(ExtraTreesRegressor(50, n_jobs=-1), transform_y=(np.log, np.exp)),
+        'model': Sklearn(ExtraTreesRegressor(50, max_depth=10, n_jobs=-1), transform_y=(np.log, np.exp)),
     },
 
     'rf1': {
         'features': ['numeric', 'categorical_encoded'],
-        'model': Sklearn(RandomForestRegressor(50, n_jobs=-1), transform_y=(np.log, np.exp)),
+        'model': Sklearn(RandomForestRegressor(50, max_depth=10, max_features=0.2, min_samples_leaf=2, n_jobs=-1), transform_y=(np.log, np.exp)),
     },
 
     'lr1': {
@@ -128,20 +176,60 @@ presets = {
         'model': Sklearn(Pipeline([('sc', StandardScaler()), ('lr', Ridge(1e-3))]), transform_y=(np.log, np.exp)),
     },
 
+    'lr2': {
+        'features': ['pca'],
+        'model': Sklearn(Ridge(1e-3), transform_y=(np.log, np.exp)),
+    },
+
     'knn1': {
-        'features': ['numeric', 'categorical_encoded'],
+        'features': ['pca'],
         'model': Sklearn(Pipeline([('sc', StandardScaler()), ('knn', KNeighborsRegressor(5))]), transform_y=(np.log, np.exp)),
+    },
+
+    'l2_svr': {
+        'predictions': [
+            '20161013-1512-xgb1-1146.11469',
+            '20161013-1606-et1-1227.13876',
+            '20161013-1546-lr1-1250.76315',
+            '20161013-2256-lr2-1250.56353',
+            '20161013-2323-xgb2-1147.11866',
+            '20161014-1330-xgb3-1143.31331',
+        ],
+        'prediction_transform': np.log,
+        'model': Sklearn(LinearSVR()),
     },
 
     'l2_lr': {
         'predictions': [
             '20161013-1512-xgb1-1146.11469',
             '20161013-1606-et1-1227.13876',
-            '20161013-1532-lr1-1290.94745',
             '20161013-1546-lr1-1250.76315',
+            '20161013-2256-lr2-1250.56353',
+            '20161013-2323-xgb2-1147.11866',
+            '20161014-1330-xgb3-1143.31331',
         ],
         'prediction_transform': np.log,
         'model': Sklearn(Ridge(), transform_y=(np.log, np.exp)),
+    },
+
+    'l2_xgb': {
+        'features': ['categorical_encoded'],
+        'predictions': [
+            '20161013-1512-xgb1-1146.11469',
+            '20161013-1606-et1-1227.13876',
+            '20161013-1546-lr1-1250.76315',
+            '20161013-2256-lr2-1250.56353',
+            '20161013-2323-xgb2-1147.11866',
+            '20161014-1330-xgb3-1143.31331',
+        ],
+        'prediction_transform': np.log,
+        'model': Xgb({
+            'max_depth': 4,
+            'eta': 0.06,
+            'colsample_bytree': 0.7,
+            'subsample': 0.95,
+            'min_child_weight': 10,
+        }, n_iter=550, transform_y=(norm_y, norm_y_inv)),
     },
 }
 
