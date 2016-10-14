@@ -39,7 +39,7 @@ def load_prediction(split, name):
 
 class Dataset(object):
 
-    parts = ['loss', 'numeric', 'numeric_boxcox', 'categorical', 'categorical_counts', 'categorical_encoded', 'categorical_dummy']
+    parts = ['loss', 'numeric', 'numeric_boxcox', 'categorical', 'categorical_counts', 'categorical_encoded', 'categorical_dummy', 'pca']
 
     @classmethod
     def get_part_features(cls, part_name):
