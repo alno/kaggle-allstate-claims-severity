@@ -17,6 +17,14 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Ridge
 from sklearn.svm import LinearSVR
 
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Lambda
+from keras.layers.advanced_activations import PReLU
+from keras.optimizers import Nadam, SGD, Adam
+from keras.regularizers import l1l2
+from keras import backend as K
+from keras import initializations
+
 from scipy.stats import boxcox
 
 from util import Dataset, load_prediction
@@ -96,6 +104,57 @@ class Sklearn(object):
         return pd.Series(pred, index=X.index)
 
 
+class Keras(object):
+
+    def __init__(self, params, transform_y=None):
+        self.params = params
+        self.transform_y = transform_y
+
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None):
+        y_train = y_train.values
+        y_eval = y_eval.values
+
+        if self.transform_y is not None:
+            y_tr, y_inv = self.transform_y
+
+            y_train = y_tr(y_train)
+            y_eval = y_tr(y_eval)
+
+        reg = l1l2(self.params['l1'], self.params['l2'])
+
+        self.scaler = StandardScaler()
+
+        X_train = self.scaler.fit_transform(X_train.values)
+        X_eval = self.scaler.transform(X_eval.values)
+
+        self.model = Sequential()
+
+        for i, layer_size in enumerate(self.params['layers']):
+            if i == 0:
+                self.model.add(Dense(layer_size, init='he_normal', W_regularizer=reg, input_shape=(X_train.shape[1],)))
+            else:
+                self.model.add(Dense(layer_size, init='he_normal', W_regularizer=reg))
+            self.model.add(PReLU())
+
+            if 'dropout' in self.params:
+                self.model.add(Dropout(self.params['dropout']))
+
+        self.model.add(Dense(1, input_shape=(X_train.shape[1],)))
+
+        self.model.compile(optimizer=Adam(lr=self.params['lr']), loss='mae')
+
+        self.model.fit(X_train, y_train, validation_data=(X_eval, y_eval), batch_size=self.params['batch_size'], nb_epoch=self.params['n_epoch'], verbose=1, shuffle=True)
+
+    def predict(self, X):
+        pred = self.model.predict(self.scaler.transform(X.values)).reshape((X.shape[0],))
+
+        if self.transform_y is not None:
+            _, y_inv = self.transform_y
+            pred = y_inv(pred)
+
+        return pd.Series(pred, index=X.index)
+
+
 def load_x(ds, preset):
     feature_parts = [Dataset.load_part(ds, part) for part in preset.get('features', [])]
     prediction_parts = [load_prediction(ds, p) for p in preset.get('predictions', [])]
@@ -126,6 +185,22 @@ parser.add_argument('preset', type=str, help='model preset (features and hyperpa
 args = parser.parse_args()
 
 n_folds = 5
+
+l1_predictions = [
+    '20161013-1512-xgb1-1146.11469',
+    '20161013-1606-et1-1227.13876',
+    #'20161013-1546-lr1-1250.76315',
+    '20161013-2256-lr2-1250.56353',
+    '20161013-2323-xgb2-1147.11866',
+    '20161014-1330-xgb3-1143.31331',
+    #'20161015-0118-nn1-1179.19525',
+    '20161016-1716-nn1-1172.44150',
+]
+
+l2_predictions = [
+    '20161015-0118-l2_lr-1135.83902',
+    '20161015-0120-l2_nn-1133.22684',
+]
 
 presets = {
     'xgb1': {
@@ -161,6 +236,12 @@ presets = {
         }, n_iter=550, transform_y=(norm_y, norm_y_inv)),
     },
 
+    'nn1': {
+        'features': ['numeric', 'categorical_encoded'],
+        'n_bags': 2,
+        'model': Keras({'l1': 1e-3, 'l2': 1e-3, 'lr': 1e-3, 'n_epoch': 100, 'batch_size': 48, 'layers': [400, 200], 'dropout': 0.2}),
+    },
+
     'et1': {
         'features': ['numeric', 'categorical_encoded'],
         'model': Sklearn(ExtraTreesRegressor(50, max_depth=10, n_jobs=-1), transform_y=(np.log, np.exp)),
@@ -177,6 +258,11 @@ presets = {
     },
 
     'lr2': {
+        'features': ['numeric', 'categorical_encoded'],
+        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('lr', Ridge(1e-3))]), transform_y=(np.log, np.exp)),
+    },
+
+    'lr2': {
         'features': ['pca'],
         'model': Sklearn(Ridge(1e-3), transform_y=(np.log, np.exp)),
     },
@@ -186,42 +272,21 @@ presets = {
         'model': Sklearn(Pipeline([('sc', StandardScaler()), ('knn', KNeighborsRegressor(5))]), transform_y=(np.log, np.exp)),
     },
 
-    'l2_svr': {
-        'predictions': [
-            '20161013-1512-xgb1-1146.11469',
-            '20161013-1606-et1-1227.13876',
-            '20161013-1546-lr1-1250.76315',
-            '20161013-2256-lr2-1250.56353',
-            '20161013-2323-xgb2-1147.11866',
-            '20161014-1330-xgb3-1143.31331',
-        ],
-        'prediction_transform': np.log,
-        'model': Sklearn(LinearSVR()),
+    'l2_nn': {
+        'predictions': l1_predictions,
+        'n_bags': 5,
+        'model': Keras({'l1': 1e-3, 'l2': 1e-3, 'lr': 1e-2, 'n_epoch': 10, 'batch_size': 48, 'layers': [10]}),
     },
 
     'l2_lr': {
-        'predictions': [
-            '20161013-1512-xgb1-1146.11469',
-            '20161013-1606-et1-1227.13876',
-            '20161013-1546-lr1-1250.76315',
-            '20161013-2256-lr2-1250.56353',
-            '20161013-2323-xgb2-1147.11866',
-            '20161014-1330-xgb3-1143.31331',
-        ],
+        'predictions': l1_predictions,
         'prediction_transform': np.log,
         'model': Sklearn(Ridge(), transform_y=(np.log, np.exp)),
     },
 
     'l2_xgb': {
         'features': ['categorical_encoded'],
-        'predictions': [
-            '20161013-1512-xgb1-1146.11469',
-            '20161013-1606-et1-1227.13876',
-            '20161013-1546-lr1-1250.76315',
-            '20161013-2256-lr2-1250.56353',
-            '20161013-2323-xgb2-1147.11866',
-            '20161014-1330-xgb3-1143.31331',
-        ],
+        'predictions': l1_predictions,
         'prediction_transform': np.log,
         'model': Xgb({
             'max_depth': 4,
@@ -231,14 +296,21 @@ presets = {
             'min_child_weight': 10,
         }, n_iter=550, transform_y=(norm_y, norm_y_inv)),
     },
+
+    'l3_nn': {
+        'predictions': l2_predictions,
+        'model': Keras({'l1': 1e-3, 'l2': 1e-3, 'lr': 1e-2, 'n_epoch': 10, 'batch_size': 48, 'layers': [10]}),
+    },
 }
 
 preset = presets[args.preset]
 
+n_bags = preset.get('n_bags', 1)
+
 print "Loading train data..."
 train_x = load_x('train', preset)
 train_y = Dataset.load_part('train', 'loss')
-train_p = pd.Series(np.nan, index=train_x.index)
+train_p = pd.Series(0.0, index=train_x.index)
 
 print "Loading test data..."
 test_x = load_x('test', preset)
@@ -257,30 +329,32 @@ for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_fol
     fold_eval_x = train_x.iloc[fold_eval_idx]
     fold_eval_y = train_y.iloc[fold_eval_idx]
 
-    # Fit model
-    model = preset['model']
-    model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y)
+    for _ in xrange(n_bags):
+        # Fit model
+        model = preset['model']
+        model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y)
 
-    del fold_train_x, fold_train_y
+        # Predict on eval
+        train_p.loc[fold_eval_x.index] += model.predict(fold_eval_x)
 
-    # Predict on eval
-    fold_eval_p = model.predict(fold_eval_x)
-    fold_mae = mean_absolute_error(fold_eval_y, fold_eval_p)
+        # Predict on test
+        test_p += model.predict(test_x)
 
-    train_p.loc[fold_eval_p.index] = fold_eval_p
+    # Normalize train predictions
+    train_p.loc[fold_eval_x.index] /= n_bags
 
-    del fold_eval_x, fold_eval_y
+    # Calculate err
+    maes.append(mean_absolute_error(fold_eval_y, train_p.loc[fold_eval_x.index]))
 
-    maes.append(fold_mae)
+    print "  MAE: %.5f" % maes[-1]
 
-    print "  MAE: %.5f" % fold_mae
+    # Free mem
+    del fold_train_x, fold_train_y, fold_eval_x, fold_eval_y
 
-    # Predict on test
-    test_p += model.predict(test_x)
 
 ## Analyzing predictions
 
-test_p /= n_folds
+test_p /= n_folds * n_bags
 
 mae_mean = np.mean(maes)
 mae_std = np.std(maes)
