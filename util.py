@@ -55,6 +55,7 @@ class Dataset(object):
         'id': 'd1',
         'loss': 'd1',
         'numeric': 'd2',
+        'numeric_scaled': 'd2',
         'numeric_boxcox': 'd2',
         'categorical': 'd2',
         'categorical_counts': 'd2',
@@ -121,6 +122,6 @@ class Dataset(object):
         new_parts = {}
 
         for part_name in self.parts:
-            new_parts[part_name] = self.parts[part_name].iloc[index]
+            new_parts[part_name] = self.parts[part_name][index]
 
         return Dataset(**new_parts)
