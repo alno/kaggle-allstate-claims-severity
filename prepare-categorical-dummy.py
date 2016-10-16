@@ -1,29 +1,40 @@
-import pandas as pd
+import numpy as np
+import scipy.sparse as sp
 
 from tqdm import tqdm
 from util import Dataset
 
 print "Loading data..."
 
+min_freq = 5
+
 train_cat = Dataset.load_part('train', 'categorical')
 test_cat = Dataset.load_part('test', 'categorical')
 
-train_cat_enc = pd.DataFrame(index=train_cat.index)
-test_cat_enc = pd.DataFrame(index=test_cat.index)
+train_cat_enc = []
+test_cat_enc = []
 
-with tqdm(total=len(train_cat.columns), desc='  Encoding', unit='cols') as pbar:
-    for col in train_cat.columns:
-        value_counts = train_cat[col].value_counts().to_dict()
+cats = Dataset.get_part_features('categorical')
+features = []
+
+with tqdm(total=len(cats), desc='  Encoding', unit='cols') as pbar:
+    for col, cat in enumerate(cats):
+        value_counts = dict(zip(*np.unique(train_cat[:, col], return_counts=True)))
 
         for val in value_counts:
-            if value_counts[val] > 5:
-                train_cat_enc['%s_%s' % (col, val)] = (train_cat[col] == val).astype(int)
-                test_cat_enc['%s_%s' % (col, val)] = (test_cat[col] == val).astype(int)
+            if value_counts[val] >= min_freq:
+                features.append('%s_%s' % (cat, val))
+                train_cat_enc.append(sp.csr_matrix((train_cat[:, col] == val).astype(np.uint8).reshape((train_cat.shape[0], 1))))
+                test_cat_enc.append(sp.csr_matrix((test_cat[:, col] == val).astype(np.uint8).reshape((test_cat.shape[0], 1))))
 
         pbar.update(1)
 
 print "Saving..."
 
+train_cat_enc = sp.hstack(train_cat_enc, format='csr')
+test_cat_enc = sp.hstack(test_cat_enc, format='csr')
+
+Dataset.save_part_features('categorical_dummy', features)
 Dataset(categorical_dummy=train_cat_enc).save('train')
 Dataset(categorical_dummy=test_cat_enc).save('test')
 

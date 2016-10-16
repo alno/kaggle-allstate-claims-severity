@@ -27,7 +27,7 @@ from keras import initializations
 
 from scipy.stats import boxcox
 
-from util import Dataset, load_prediction
+from util import Dataset, load_prediction, hstack, vstack
 
 
 class Xgb(object):
@@ -50,9 +50,6 @@ class Xgb(object):
         self.transform_y = transform_y
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None):
-        y_train = y_train.values
-        y_eval = y_eval.values
-
         if self.transform_y is not None:
             y_tr, y_inv = self.transform_y
 
@@ -63,20 +60,20 @@ class Xgb(object):
         else:
             feval = None
 
-        dtrain = xgb.DMatrix(X_train.values, label=y_train)
-        deval = xgb.DMatrix(X_eval.values, label=y_eval)
+        dtrain = xgb.DMatrix(X_train, label=y_train)
+        deval = xgb.DMatrix(X_eval, label=y_eval)
 
         self.model = xgb.train(self.params, dtrain, self.n_iter, [(deval, 'eval'), (dtrain, 'train')], verbose_eval=10, feval=feval)
 
     def predict(self, X):
-        pred = self.model.predict(xgb.DMatrix(X.values))
+        pred = self.model.predict(xgb.DMatrix(X))
 
         if self.transform_y is not None:
             _, y_inv = self.transform_y
 
             pred = y_inv(pred)
 
-        return pd.Series(pred, index=X.index)
+        return pred
 
 
 class Sklearn(object):
@@ -86,16 +83,14 @@ class Sklearn(object):
         self.transform_y = transform_y
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None):
-        y_train = y_train.values
-
         if self.transform_y is not None:
             y_tr, _ = self.transform_y
             y_train = y_tr(y_train)
 
-        self.model.fit(X_train.values, y_train)
+        self.model.fit(X_train, y_train)
 
     def predict(self, X):
-        pred = self.model.predict(X.values)
+        pred = self.model.predict(X)
 
         if self.transform_y is not None:
             _, y_inv = self.transform_y
@@ -111,9 +106,6 @@ class Keras(object):
         self.transform_y = transform_y
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None):
-        y_train = y_train.values
-        y_eval = y_eval.values
-
         if self.transform_y is not None:
             y_tr, y_inv = self.transform_y
 
@@ -122,10 +114,10 @@ class Keras(object):
 
         reg = l1l2(self.params['l1'], self.params['l2'])
 
-        self.scaler = StandardScaler()
+        self.scaler = StandardScaler(with_mean=False)
 
-        X_train = self.scaler.fit_transform(X_train.values)
-        X_eval = self.scaler.transform(X_eval.values)
+        X_train = self.scaler.fit_transform(X_train)
+        X_eval = self.scaler.transform(X_eval)
 
         self.model = Sequential()
 
@@ -146,7 +138,7 @@ class Keras(object):
         self.model.fit(X_train, y_train, validation_data=(X_eval, y_eval), batch_size=self.params['batch_size'], nb_epoch=self.params['n_epoch'], verbose=1, shuffle=True)
 
     def predict(self, X):
-        pred = self.model.predict(self.scaler.transform(X.values)).reshape((X.shape[0],))
+        pred = self.model.predict(self.scaler.transform(X)).reshape((X.shape[0],))
 
         if self.transform_y is not None:
             _, y_inv = self.transform_y
@@ -162,7 +154,7 @@ def load_x(ds, preset):
     if 'prediction_transform' in preset:
         prediction_parts = map(preset['prediction_transform'], prediction_parts)
 
-    return pd.concat(feature_parts + prediction_parts, axis=1)
+    return hstack(feature_parts + prediction_parts)
 
 
 norm_y_lambda = 0.7
@@ -254,22 +246,22 @@ presets = {
 
     'lr1': {
         'features': ['numeric', 'categorical_dummy'],
-        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('lr', Ridge(1e-3))]), transform_y=(np.log, np.exp)),
+        'model': Sklearn(Pipeline([('sc', StandardScaler(with_mean=False)), ('lr', Ridge(1e-3))]), transform_y=(np.log, np.exp)),
     },
 
     'lr2': {
         'features': ['numeric', 'categorical_encoded'],
-        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('lr', Ridge(1e-3))]), transform_y=(np.log, np.exp)),
+        'model': Sklearn(Pipeline([('sc', StandardScaler(with_mean=False)), ('lr', Ridge(1e-3))]), transform_y=(np.log, np.exp)),
     },
 
     'lr2': {
-        'features': ['pca'],
+        'features': ['svd'],
         'model': Sklearn(Ridge(1e-3), transform_y=(np.log, np.exp)),
     },
 
     'knn1': {
-        'features': ['pca'],
-        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('knn', KNeighborsRegressor(5))]), transform_y=(np.log, np.exp)),
+        'features': ['svd'],
+        'model': Sklearn(Pipeline([('sc', StandardScaler(with_mean=False)), ('knn', KNeighborsRegressor(5))]), transform_y=(np.log, np.exp)),
     },
 
     'l2_nn': {
@@ -310,11 +302,11 @@ n_bags = preset.get('n_bags', 1)
 print "Loading train data..."
 train_x = load_x('train', preset)
 train_y = Dataset.load_part('train', 'loss')
-train_p = pd.Series(0.0, index=train_x.index)
+train_p = pd.Series(0.0, index=Dataset.load_part('train', 'id'))
 
 print "Loading test data..."
 test_x = load_x('test', preset)
-test_p = pd.Series(0.0, index=test_x.index)
+test_p = pd.Series(0.0, index=Dataset.load_part('test', 'id'))
 
 maes = []
 
@@ -323,11 +315,11 @@ for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_fol
     print
     print "  Fold %d..." % fold
 
-    fold_train_x = train_x.iloc[fold_train_idx]
-    fold_train_y = train_y.iloc[fold_train_idx]
+    fold_train_x = train_x[fold_train_idx]
+    fold_train_y = train_y[fold_train_idx]
 
-    fold_eval_x = train_x.iloc[fold_eval_idx]
-    fold_eval_y = train_y.iloc[fold_eval_idx]
+    fold_eval_x = train_x[fold_eval_idx]
+    fold_eval_y = train_y[fold_eval_idx]
 
     for _ in xrange(n_bags):
         # Fit model
@@ -335,16 +327,16 @@ for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_fol
         model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y)
 
         # Predict on eval
-        train_p.loc[fold_eval_x.index] += model.predict(fold_eval_x)
+        train_p.iloc[fold_eval_idx] += model.predict(fold_eval_x)
 
         # Predict on test
         test_p += model.predict(test_x)
 
     # Normalize train predictions
-    train_p.loc[fold_eval_x.index] /= n_bags
+    train_p.iloc[fold_eval_idx] /= n_bags
 
     # Calculate err
-    maes.append(mean_absolute_error(fold_eval_y, train_p.loc[fold_eval_x.index]))
+    maes.append(mean_absolute_error(fold_eval_y, train_p.iloc[fold_eval_idx]))
 
     print "  MAE: %.5f" % maes[-1]
 

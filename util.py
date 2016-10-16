@@ -1,7 +1,9 @@
 import numpy as np
 import pandas as pd
 
-import pickle
+import scipy.sparse as sp
+
+import cPickle as pickle
 import os
 
 n_folds = 5
@@ -10,15 +12,15 @@ cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
 
 
 def hstack(x):
-    if any(csc.issparse(p) for p in x):
-        return csc.hstack(x, format='csr')
+    if any(sp.issparse(p) for p in x):
+        return sp.hstack(x, format='csr')
     else:
         return np.hstack(x)
 
 
 def vstack(x):
-    if any(csc.issparse(p) for p in x):
-        return csc.vstack(x, format='csr')
+    if any(sp.issparse(p) for p in x):
+        return sp.vstack(x, format='csr')
     else:
         return np.vstack(x)
 
@@ -33,13 +35,39 @@ def load_pickle(filename):
         return pickle.load(f)
 
 
+def save_csr(filename, array):
+    np.savez_compressed(filename, data=array.data, indices=array.indices, indptr=array.indptr, shape=array.shape)
+
+
+def load_csr(filename):
+    loader = np.load(filename)
+
+    return sp.csr_matrix((loader['data'], loader['indices'], loader['indptr']), shape=loader['shape'])
+
+
 def load_prediction(split, name):
     return pd.read_csv('preds/%s-%s.csv' % (name, split), index_col='id').iloc[:, 0]
 
 
 class Dataset(object):
 
-    parts = ['loss', 'numeric', 'numeric_boxcox', 'categorical', 'categorical_counts', 'categorical_encoded', 'categorical_dummy', 'pca']
+    part_types = {
+        'id': 'd1',
+        'loss': 'd1',
+        'numeric': 'd2',
+        'numeric_boxcox': 'd2',
+        'categorical': 'd2',
+        'categorical_counts': 'd2',
+        'categorical_encoded': 'd2',
+        'categorical_dummy': 's2',
+        'svd': 'd2'
+    }
+
+    parts = part_types.keys()
+
+    @classmethod
+    def save_part_features(cls, part_name, features):
+        save_pickle('%s/%s-features.pickle' % (cache_dir, part_name), features)
 
     @classmethod
     def get_part_features(cls, part_name):
@@ -51,7 +79,10 @@ class Dataset(object):
 
     @classmethod
     def load_part(cls, name, part_name):
-        return pd.read_pickle('%s/%s-%s.pickle' % (cache_dir, part_name, name))
+        if cls.part_types[part_name][0] == 's':
+            return load_csr('%s/%s-%s.npz' % (cache_dir, part_name, name))
+        else:
+            return np.load('%s/%s-%s.npy' % (cache_dir, part_name, name))
 
     @classmethod
     def concat(cls, datasets):
@@ -78,7 +109,13 @@ class Dataset(object):
 
     def save(self, name):
         for part_name in self.parts:
-            self.parts[part_name].to_pickle('%s/%s-%s.pickle' % (cache_dir, part_name, name))
+            self.save_part(part_name, name)
+
+    def save_part(self, part_name, name):
+        if self.part_types[part_name][0] == 's':
+            save_csr('%s/%s-%s.npz' % (cache_dir, part_name, name), self.parts[part_name])
+        else:
+            np.save('%s/%s-%s.npy' % (cache_dir, part_name, name), self.parts[part_name])
 
     def slice(self, index):
         new_parts = {}
