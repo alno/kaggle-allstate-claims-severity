@@ -309,18 +309,24 @@ n_folds = 5
 l1_predictions = [
     '20161013-1512-xgb1-1146.11469',
     '20161013-1606-et1-1227.13876',
+    #'20161017-1704-rf1-1202.08857',
     #'20161013-1546-lr1-1250.76315',
     '20161013-2256-lr2-1250.56353',
     #'20161013-2323-xgb2-1147.11866',
     '20161014-1330-xgb3-1143.31331',
+    '20161017-0645-xgb3-1137.53294',
     #'20161015-0118-nn1-1179.19525',
-    '20161016-1716-nn1-1172.44150',
+    #'20161016-1716-nn1-1172.44150',
     '20161016-2155-nn2-1142.81539',
+    '20161017-0252-nn2-1138.89229',
+
+    '20161017-1350-nn4-1165.61897',
 ]
 
 l2_predictions = [
     '20161015-0118-l2_lr-1135.83902',
     '20161015-0120-l2_nn-1133.22684',
+    '20161017-0116-l2_nn-1129.48210',
 ]
 
 presets = {
@@ -399,14 +405,20 @@ presets = {
         'model': Keras({'l1': 1e-6, 'l2': 1e-6, 'n_epoch': 100, 'batch_size': 48, 'layers': [200, 100], 'dropouts': [0.2, 0.1]}),
     },
 
+    'nn4': {
+        'features': ['svd'],
+        'n_bags': 1,
+        'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 25, 'batch_size': 128, 'layers': [300, 100], 'dropouts': [0.3, 0.1]}),
+    },
+
     'et1': {
         'features': ['numeric', 'categorical_encoded'],
-        'model': Sklearn(ExtraTreesRegressor(50, max_depth=10, n_jobs=-1), transform_y=(np.log, np.exp)),
+        'model': Sklearn(ExtraTreesRegressor(50, max_features=0.2, n_jobs=-1), transform_y=(np.log, np.exp)),
     },
 
     'rf1': {
         'features': ['numeric', 'categorical_encoded'],
-        'model': Sklearn(RandomForestRegressor(50, max_depth=10, max_features=0.2, min_samples_leaf=2, n_jobs=-1), transform_y=(np.log, np.exp)),
+        'model': Sklearn(RandomForestRegressor(100, max_features=0.2, n_jobs=-1), transform_y=(np.log, np.exp)),
     },
 
     'lr1': {
@@ -436,8 +448,17 @@ presets = {
 
     'l2_nn': {
         'predictions': l1_predictions,
-        'n_bags': 4,
+        'n_bags': 2,
+        'n_splits': 2,
         'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'lr': 1e-3, 'n_epoch': 7, 'batch_size': 128, 'layers': [10]}),
+    },
+
+    'l2_nn2': {
+        'features': ['numeric_scaled', 'categorical_dummy'],
+        'predictions': l1_predictions,
+        'n_bags': 2,
+        'n_splits': 2,
+        'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'lr': 1e-3, 'n_epoch': 700, 'batch_size': 128, 'layers': [50, 20]}),
     },
 
     'l2_lr': {
@@ -472,6 +493,7 @@ preset = presets[args.preset]
 feature_builders = preset.get('feature_builders', [])
 
 n_bags = preset.get('n_bags', 1)
+n_splits = preset.get('n_splits', 1)
 
 print "Loading train data..."
 train_x = load_x('train', preset)
@@ -486,74 +508,88 @@ test_r = Dataset.load('test', parts=np.unique([b.requirements for b in feature_b
 
 maes = []
 
-print "Training..."
-for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_folds, shuffle=True, random_state=2016)):
+for split in xrange(n_splits):
     print
-    print "  Fold %d..." % fold
+    print "Training split %d..." % split
 
-    fold_train_x = train_x[fold_train_idx]
-    fold_train_y = train_y[fold_train_idx]
-    fold_train_r = train_r.slice(fold_train_idx)
+    for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_folds, shuffle=True, random_state=2016 + 17*split)):
+        print
+        print "  Fold %d..." % fold
 
-    fold_eval_x = train_x[fold_eval_idx]
-    fold_eval_y = train_y[fold_eval_idx]
-    fold_eval_r = train_r.slice(fold_eval_idx)
+        fold_train_x = train_x[fold_train_idx]
+        fold_train_y = train_y[fold_train_idx]
+        fold_train_r = train_r.slice(fold_train_idx)
 
-    fold_test_x = test_x
-    fold_test_r = test_r
+        fold_eval_x = train_x[fold_eval_idx]
+        fold_eval_y = train_y[fold_eval_idx]
+        fold_eval_r = train_r.slice(fold_eval_idx)
 
-    if len(feature_builders) > 0:  # TODO: Move inside of bagging loop
-        print "    Building per-fold features..."
+        fold_test_x = test_x
+        fold_test_r = test_r
 
-        fold_train_x = [fold_train_x]
-        fold_eval_x = [fold_eval_x]
-        fold_test_x = [fold_test_x]
+        if len(feature_builders) > 0:  # TODO: Move inside of bagging loop
+            print "    Building per-fold features..."
 
-        for fb in feature_builders:
-            fold_train_x.append(fb.fit_transform(fold_train_r))
-            fold_eval_x.append(fb.transform(fold_eval_r))
-            fold_test_x.append(fb.transform(fold_test_r))
+            fold_train_x = [fold_train_x]
+            fold_eval_x = [fold_eval_x]
+            fold_test_x = [fold_test_x]
 
-        fold_train_x = hstack(fold_train_x)
-        fold_eval_x = hstack(fold_eval_x)
-        fold_test_x = hstack(fold_test_x)
+            for fb in feature_builders:
+                fold_train_x.append(fb.fit_transform(fold_train_r))
+                fold_eval_x.append(fb.transform(fold_eval_r))
+                fold_test_x.append(fb.transform(fold_test_r))
 
-    for i in xrange(n_bags):
-        print "    Training model %d..." % i
+            fold_train_x = hstack(fold_train_x)
+            fold_eval_x = hstack(fold_eval_x)
+            fold_test_x = hstack(fold_test_x)
 
-        # Fit model
-        model = preset['model']
-        model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y, seed=42 + 13*i)
+        fold_eval_p = np.zeros((fold_eval_x.shape[0], ))
+        fold_test_p = np.zeros((fold_test_x.shape[0], ))
 
-        print "    Predicting eval..."
-        train_p.iloc[fold_eval_idx] += model.predict(fold_eval_x)
+        for i in xrange(n_bags):
+            print "    Training model %d..." % i
 
-        print "    Predicting test..."
-        test_p += model.predict(fold_test_x)
+            # Fit model
+            model = preset['model']
+            model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y, seed=42 + 13*i + 29*split)
 
-    # Normalize train predictions
-    train_p.iloc[fold_eval_idx] /= n_bags
+            print "    Predicting eval..."
+            fold_eval_p += model.predict(fold_eval_x)
 
-    # Calculate err
-    maes.append(mean_absolute_error(fold_eval_y, train_p.iloc[fold_eval_idx]))
+            print "    Predicting test..."
+            fold_test_p += model.predict(fold_test_x)
 
-    print "  MAE: %.5f" % maes[-1]
+        # Normalize train/test predictions
+        fold_eval_p /= n_bags
+        fold_test_p /= n_bags
 
-    # Free mem
-    del fold_train_x, fold_train_y, fold_eval_x, fold_eval_y
+        # Normalize train predictions
+        train_p.iloc[fold_eval_idx] += fold_eval_p
+        test_p += fold_test_p
+
+        # Calculate err
+        maes.append(mean_absolute_error(fold_eval_y, fold_eval_p))
+
+        print "  MAE: %.5f" % maes[-1]
+
+        # Free mem
+        del fold_train_x, fold_train_y, fold_eval_x, fold_eval_y
 
 
 ## Analyzing predictions
 
-test_p /= n_folds * n_bags
+test_p /= n_splits * n_folds
+train_p /= n_splits
 
 mae_mean = np.mean(maes)
 mae_std = np.std(maes)
+mae = mean_absolute_error(train_y, train_p)
 
 print
 print "CV MAE: %.5f +- %.5f" % (mae_mean, mae_std)
+print "CV RES MAE: %.5f" % mae
 
-name = "%s-%s-%.5f" % (datetime.datetime.now().strftime('%Y%m%d-%H%M'), args.preset, mae_mean)
+name = "%s-%s-%.5f" % (datetime.datetime.now().strftime('%Y%m%d-%H%M'), args.preset, mae)
 
 print
 print "Saving predictions... (%s)" % name
