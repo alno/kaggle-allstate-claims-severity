@@ -7,11 +7,14 @@ import argparse
 import os
 import datetime
 
+from math import sqrt
 from shutil import copy2
 
+np.random.seed(1337)
+
 from sklearn.metrics import mean_absolute_error
-from sklearn.cross_validation import KFold
-from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor
+from sklearn.cross_validation import KFold, train_test_split
+from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor, GradientBoostingRegressor
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -23,10 +26,14 @@ from keras.models import Sequential
 from keras.layers import Dense, Dropout, Lambda
 from keras.layers.advanced_activations import PReLU
 from keras.regularizers import l1l2
+from keras.optimizers import SGD
+from keras.callbacks import ReduceLROnPlateau, LearningRateScheduler
 from keras import backend as K
 from keras import initializations
 
 from scipy.stats import boxcox
+
+from bayes_opt import BayesianOptimization
 
 from tqdm import tqdm
 from util import Dataset, load_prediction, hstack
@@ -167,9 +174,10 @@ class Xgb(object):
 
 class Sklearn(object):
 
-    def __init__(self, model, transform_y=None):
+    def __init__(self, model, transform_y=None, param_grid=None):
         self.model = model
         self.transform_y = transform_y
+        self.param_grid = param_grid
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
         if self.transform_y is not None:
@@ -186,6 +194,29 @@ class Sklearn(object):
             pred = y_inv(pred)
 
         return pred
+
+    def optimize(self, X_train, y_train, X_eval, y_eval):
+        def fun(**params):
+            for k in params:
+                if type(self.param_grid[k][0]) is int:
+                    params[k] = int(params[k])
+
+            print "Trying %s..." % str(params)
+
+            self.model.set_params(**params)
+            self.fit(X_train, y_train)
+            pred = self.predict(X_eval)
+
+            mae = mean_absolute_error(y_eval, pred)
+
+            print "MAE: %.5f" % mae
+
+            return -mae
+
+        opt = BayesianOptimization(fun, self.param_grid)
+        opt.maximize()
+
+        print "Best mae: %.5f, params: %s" % (opt.res['max']['max_val'], opt.res['mas']['max_params'])
 
 
 class LshForest(object):
@@ -225,13 +256,13 @@ class Keras(object):
         self.scale = scale
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
+        np.random.seed(seed * 11 + 137)
+
         if self.transform_y is not None:
             y_tr, y_inv = self.transform_y
 
             y_train = y_tr(y_train)
             y_eval = y_tr(y_eval)
-
-        reg = l1l2(self.params['l1'], self.params['l2'])
 
         if self.scale:
             self.scaler = StandardScaler(with_mean=False)
@@ -242,6 +273,8 @@ class Keras(object):
         self.model = Sequential()
 
         for i, layer_size in enumerate(self.params['layers']):
+            reg = l1l2(self.params['l1'], self.params['l2'])
+
             if i == 0:
                 self.model.add(Dense(layer_size, init='he_normal', W_regularizer=reg, input_shape=(X_train.shape[1],)))
             else:
@@ -254,12 +287,12 @@ class Keras(object):
 
         self.model.add(Dense(1, init='he_normal'))
 
-        self.model.compile(optimizer='adadelta', loss='mae')
+        self.model.compile(optimizer=self.params.get('optimizer', 'adadelta'), loss='mae')
 
         self.model.fit_generator(
             generator=batch_generator(X_train, y_train, self.params['batch_size'], True), samples_per_epoch=X_train.shape[0],
             validation_data=batch_generator(X_eval, y_eval, 800), nb_val_samples=X_eval.shape[0],
-            nb_epoch=self.params['n_epoch'], verbose=1)
+            nb_epoch=self.params['n_epoch'], verbose=1, callbacks=self.params.get('callbacks', []))
 
     def predict(self, X):
         if self.scale:
@@ -277,7 +310,7 @@ class Keras(object):
 def load_x(ds, preset):
     feature_parts = [Dataset.load_part(ds, part) for part in preset.get('features', [])]
     prediction_parts = [load_prediction(ds, p) for p in preset.get('predictions', [])]
-    prediction_parts = [p.reshape((p.shape[0], 1)) for p in prediction_parts]
+    prediction_parts = [p.clip(lower=0.1).reshape((p.shape[0], 1)) for p in prediction_parts]
 
     if 'prediction_transform' in preset:
         prediction_parts = map(preset['prediction_transform'], prediction_parts)
@@ -301,24 +334,33 @@ def norm_y_inv(y_bc):
 
 parser = argparse.ArgumentParser(description='Train model')
 parser.add_argument('preset', type=str, help='model preset (features and hyperparams)')
+parser.add_argument('--optimize', action='store_true', help='optimize model params')
+
 
 args = parser.parse_args()
 
-n_folds = 5
+n_folds = 8
 
 l1_predictions = [
-    '20161013-1512-xgb1-1146.11469',
-    '20161013-1606-et1-1227.13876',
-    #'20161017-1704-rf1-1202.08857',
-    #'20161013-1546-lr1-1250.76315',
+    '20161018-2047-et1-1215.83544',
+    '20161018-2057-rf1-1201.53281',
+    '20161018-1956-lr1-1248.84723',
+
     '20161013-2256-lr2-1250.56353',
-    #'20161013-2323-xgb2-1147.11866',
+    '20161018-1935-lr2-1247.38512',
+
+    '20161018-2041-gb1-1150.60901',
+    '20161018-1521-gb1-1181.25342',
+
+    '20161013-1512-xgb1-1146.11469',
+
     '20161014-1330-xgb3-1143.31331',
     '20161017-0645-xgb3-1137.53294',
-    #'20161015-0118-nn1-1179.19525',
-    #'20161016-1716-nn1-1172.44150',
+    '20161018-0434-xgb3-1137.17603',
+
     '20161016-2155-nn2-1142.81539',
     '20161017-0252-nn2-1138.89229',
+    '20161018-1033-nn2-1138.11347',
 
     '20161017-1350-nn4-1165.61897',
 ]
@@ -359,7 +401,7 @@ presets = {
 
     'xgb3': {
         'features': ['numeric', 'categorical_encoded'],
-        'n_bags': 3,
+        'n_bags': 2,
         'model': Xgb({
             'max_depth': 7,
             'eta': 0.03,
@@ -394,7 +436,7 @@ presets = {
 
     'nn2': {
         'features': ['numeric_scaled', 'categorical_dummy'],
-        'n_bags': 3,
+        'n_bags': 2,
         'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 50, 'batch_size': 128, 'layers': [400, 200], 'dropouts': [0.4, 0.2]}, scale=False),
     },
 
@@ -411,6 +453,11 @@ presets = {
         'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 25, 'batch_size': 128, 'layers': [300, 100], 'dropouts': [0.3, 0.1]}),
     },
 
+    'gb1': {
+        'features': ['numeric', 'categorical_encoded'],
+        'model': Sklearn(GradientBoostingRegressor(loss='lad', n_estimators=300, max_depth=7, max_features=0.2), param_grid={'n_estimators': (200, 400), 'max_depth': (6, 8), 'max_features': (0.1, 0.4)}),
+    },
+
     'et1': {
         'features': ['numeric', 'categorical_encoded'],
         'model': Sklearn(ExtraTreesRegressor(50, max_features=0.2, n_jobs=-1), transform_y=(np.log, np.exp)),
@@ -423,7 +470,7 @@ presets = {
 
     'lr1': {
         'features': ['numeric_scaled', 'categorical_dummy'],
-        'model': Sklearn(Ridge(1e-3), transform_y=(np.log, np.exp)),
+        'model': Sklearn(Ridge(1e-3), transform_y=(np.log, np.exp), param_grid={'C': (1e-3, 1e3)}),
     },
 
     'lr2': {
@@ -448,9 +495,8 @@ presets = {
 
     'l2_nn': {
         'predictions': l1_predictions,
-        'n_bags': 2,
-        'n_splits': 2,
-        'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'lr': 1e-3, 'n_epoch': 7, 'batch_size': 128, 'layers': [10]}),
+        'n_splits': 1,
+        'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 50, 'batch_size': 128, 'layers': [50], 'dropouts': [0.1], 'optimizer': SGD(2e-3), 'callbacks': [LearningRateScheduler(lambda i: 2e-3 / sqrt(i+1))]}),
     },
 
     'l2_nn2': {
@@ -458,7 +504,7 @@ presets = {
         'predictions': l1_predictions,
         'n_bags': 2,
         'n_splits': 2,
-        'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'lr': 1e-3, 'n_epoch': 700, 'batch_size': 128, 'layers': [50, 20]}),
+        'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 700, 'batch_size': 128, 'layers': [50, 20]}),
     },
 
     'l2_lr': {
@@ -468,15 +514,13 @@ presets = {
     },
 
     'l2_xgb': {
-        'features': ['categorical_encoded'],
         'predictions': l1_predictions,
-        'prediction_transform': np.log,
         'model': Xgb({
             'max_depth': 4,
             'eta': 0.06,
             'colsample_bytree': 0.7,
             'subsample': 0.95,
-            'min_child_weight': 10,
+            #'min_child_weight': 5,
         }, n_iter=550, transform_y=(norm_y, norm_y_inv)),
     },
 
@@ -500,6 +544,34 @@ train_x = load_x('train', preset)
 train_y = Dataset.load_part('train', 'loss')
 train_p = pd.Series(0.0, index=Dataset.load_part('train', 'id'))
 train_r = Dataset.load('train', parts=np.unique(sum([b.requirements for b in feature_builders], ['loss'])))
+
+
+if args.optimize:
+    opt_train_idx, opt_eval_idx = train_test_split(range(len(train_y)), test_size=0.2)
+
+    opt_train_x = train_x[opt_train_idx]
+    opt_train_y = train_y[opt_train_idx]
+    opt_train_r = train_r.slice(opt_train_idx)
+
+    opt_eval_x = train_x[opt_eval_idx]
+    opt_eval_y = train_y[opt_eval_idx]
+    opt_eval_r = train_r.slice(opt_eval_idx)
+
+    if len(feature_builders) > 0:  # TODO: Move inside of bagging loop
+        print "    Building per-fold features..."
+
+        opt_train_x = [opt_train_x]
+        opt_eval_x = [opt_eval_x]
+
+        for fb in feature_builders:
+            opt_train_x.append(fb.fit_transform(opt_train_r))
+            opt_eval_x.append(fb.transform(opt_eval_r))
+
+        opt_train_x = hstack(opt_train_x)
+        opt_eval_x = hstack(opt_eval_x)
+
+    preset['model'].optimize(opt_train_x, opt_train_y, opt_eval_x, opt_eval_y)
+
 
 print "Loading test data..."
 test_x = load_x('test', preset)
