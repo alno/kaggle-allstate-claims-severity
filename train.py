@@ -26,10 +26,11 @@ from keras.models import Sequential
 from keras.layers import Dense, Dropout, Lambda
 from keras.layers.advanced_activations import PReLU
 from keras.regularizers import l1l2
-from keras.optimizers import SGD
+from keras.optimizers import SGD, Adam, Nadam, Adadelta
 from keras.callbacks import ReduceLROnPlateau, LearningRateScheduler
 from keras import backend as K
 from keras import initializations
+from keras_util import ExponentialMovingAverage
 
 from scipy.stats import boxcox
 
@@ -256,6 +257,11 @@ class Keras(object):
         self.scale = scale
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
+        params = self.params
+
+        if callable(params):
+            params = params()
+
         np.random.seed(seed * 11 + 137)
 
         if self.transform_y is not None:
@@ -272,8 +278,8 @@ class Keras(object):
 
         self.model = Sequential()
 
-        for i, layer_size in enumerate(self.params['layers']):
-            reg = l1l2(self.params['l1'], self.params['l2'])
+        for i, layer_size in enumerate(params['layers']):
+            reg = l1l2(params['l1'], params['l2'])
 
             if i == 0:
                 self.model.add(Dense(layer_size, init='he_normal', W_regularizer=reg, input_shape=(X_train.shape[1],)))
@@ -282,17 +288,17 @@ class Keras(object):
 
             self.model.add(PReLU())
 
-            if 'dropouts' in self.params:
-                self.model.add(Dropout(self.params['dropouts'][i]))
+            if 'dropouts' in params:
+                self.model.add(Dropout(params['dropouts'][i]))
 
         self.model.add(Dense(1, init='he_normal'))
 
-        self.model.compile(optimizer=self.params.get('optimizer', 'adadelta'), loss='mae')
+        self.model.compile(optimizer=params.get('optimizer', 'adadelta'), loss='mae')
 
         self.model.fit_generator(
-            generator=batch_generator(X_train, y_train, self.params['batch_size'], True), samples_per_epoch=X_train.shape[0],
+            generator=batch_generator(X_train, y_train, params['batch_size'], True), samples_per_epoch=X_train.shape[0],
             validation_data=batch_generator(X_eval, y_eval, 800), nb_val_samples=X_eval.shape[0],
-            nb_epoch=self.params['n_epoch'], verbose=1, callbacks=self.params.get('callbacks', []))
+            nb_epoch=params['n_epoch'], verbose=1, callbacks=params.get('callbacks', []))
 
     def predict(self, X):
         if self.scale:
@@ -358,11 +364,16 @@ l1_predictions = [
     '20161017-0645-xgb3-1137.53294',
     '20161018-0434-xgb3-1137.17603',
 
+    '20161019-1805-xgb5-1138.26298',
+
     '20161016-2155-nn2-1142.81539',
     '20161017-0252-nn2-1138.89229',
     '20161018-1033-nn2-1138.11347',
 
     '20161017-1350-nn4-1165.61897',
+
+    '20161019-1157-nn5-1142.70844',
+    '20161019-2334-nn5-1142.50482',
 ]
 
 l2_predictions = [
@@ -415,42 +426,55 @@ presets = {
         'features': ['numeric', 'categorical_dummy'],
         'model': Xgb({
             'max_depth': 7,
-            'eta': 0.04,
+            'eta': 0.02,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'min_child_weight': 2,
+        }, n_iter=3000, transform_y=(norm_y, norm_y_inv)),
+    },
+
+    'xgb5': {
+        'features': ['numeric', 'categorical_encoded'],
+        #'n_bags': 2,
+        'model': Xgb({
+            'max_depth': 7,
+            'eta': 0.02,
             'colsample_bytree': 0.4,
             'subsample': 0.95,
             'min_child_weight': 4,
-        }, n_iter=2000, transform_y=(norm_y, norm_y_inv)),
+        }, n_iter=3000, transform_y=(norm_y, norm_y_inv)),
     },
 
     'nn-tst': {
         'features': ['numeric'],
-        'n_bags': 1,
         'model': Keras({'l1': 1e-3, 'l2': 1e-3, 'n_epoch': 1, 'batch_size': 128, 'layers': [10]}),
     },
 
     'nn1': {
         'features': ['numeric', 'categorical_encoded'],
-        'n_bags': 1,
         'model': Keras({'l1': 1e-3, 'l2': 1e-3, 'n_epoch': 100, 'batch_size': 48, 'layers': [400, 200], 'dropouts': [0.4, 0.2]}),
     },
 
     'nn2': {
         'features': ['numeric_scaled', 'categorical_dummy'],
         'n_bags': 2,
-        'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 50, 'batch_size': 128, 'layers': [400, 200], 'dropouts': [0.4, 0.2]}, scale=False),
+        'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 80, 'batch_size': 128, 'layers': [400, 200], 'dropouts': [0.4, 0.2], 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False),
     },
 
     'nn3': {
         'features': ['numeric'],
         'feature_builders': [CategoricalMeanEncoded(1000)],
-        'n_bags': 1,
         'model': Keras({'l1': 1e-6, 'l2': 1e-6, 'n_epoch': 100, 'batch_size': 48, 'layers': [200, 100], 'dropouts': [0.2, 0.1]}),
     },
 
     'nn4': {
         'features': ['svd'],
-        'n_bags': 1,
         'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 25, 'batch_size': 128, 'layers': [300, 100], 'dropouts': [0.3, 0.1]}),
+    },
+
+    'nn5': {
+        'features': ['numeric_scaled', 'categorical_dummy'],
+        'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 70, 'batch_size': 128, 'layers': [400, 200], 'dropouts': [0.4, 0.2], 'optimizer': Adam(decay=1e-5), 'callbacks': [ReduceLROnPlateau(patience=10, factor=0.2, cooldown=5), ExponentialMovingAverage()]}, scale=False),
     },
 
     'gb1': {
@@ -496,7 +520,7 @@ presets = {
     'l2_nn': {
         'predictions': l1_predictions,
         'n_splits': 1,
-        'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 50, 'batch_size': 128, 'layers': [50], 'dropouts': [0.1], 'optimizer': SGD(2e-3), 'callbacks': [LearningRateScheduler(lambda i: 2e-3 / sqrt(i+1))]}),
+        'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'layers': [50], 'dropouts': [0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3), ExponentialMovingAverage()]}),  # ReduceLROnPlateau(patience=5, factor=0.2) LearningRateScheduler(lambda i: 2e-3 / sqrt(i+1))
     },
 
     'l2_nn2': {
