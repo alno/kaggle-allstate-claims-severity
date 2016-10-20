@@ -32,6 +32,8 @@ from keras import backend as K
 from keras import initializations
 from keras_util import ExponentialMovingAverage
 
+from pylightgbm.models import GBMRegressor
+
 from scipy.stats import boxcox
 
 from bayes_opt import BayesianOptimization
@@ -164,6 +166,46 @@ class Xgb(object):
 
     def predict(self, X):
         pred = self.model.predict(xgb.DMatrix(X))
+
+        if self.transform_y is not None:
+            _, y_inv = self.transform_y
+
+            pred = y_inv(pred)
+
+        return pred
+
+
+class LightGBM(object):
+
+    default_params = {
+        'exec_path': 'lightgbm',
+        'num_threads': 4
+    }
+
+    def __init__(self, params, transform_y=None):
+        self.params = self.default_params.copy()
+
+        for k in params:
+            self.params[k] = params[k]
+
+        self.transform_y = transform_y
+
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
+        if self.transform_y is not None:
+            y_tr, y_inv = self.transform_y
+
+            y_train = y_tr(y_train)
+            y_eval = y_tr(y_eval)
+
+        params = self.params.copy()
+        params['bagging_seed'] = seed
+        params['feature_fraction_seed'] = seed + 3
+
+        self.model = GBMRegressor(**params)
+        self.model.fit(X_train, y_train, test_data=[(X_eval, y_eval)])
+
+    def predict(self, X):
+        pred = self.model.predict(X)
 
         if self.transform_y is not None:
             _, y_inv = self.transform_y
@@ -374,6 +416,8 @@ l1_predictions = [
 
     '20161019-1157-nn5-1142.70844',
     '20161019-2334-nn5-1142.50482',
+
+    '20161020-2123-lgb1-1135.87331',
 ]
 
 l2_predictions = [
@@ -443,6 +487,21 @@ presets = {
             'subsample': 0.95,
             'min_child_weight': 4,
         }, n_iter=3000, transform_y=(norm_y, norm_y_inv)),
+    },
+
+    'lgb1': {
+        'features': ['numeric', 'categorical_encoded'],
+        #'n_bags': 2,
+        'model': LightGBM({
+            'num_iterations': 4000,
+            'learning_rate': 0.006,
+            'num_leaves': 250,
+            'min_data_in_leaf': 3,
+            'feature_fraction': 0.25,
+            'bagging_fraction': 0.95,
+            'bagging_freq': 5,
+            'metric_freq': 10
+        }, transform_y=(norm_y, norm_y_inv)),
     },
 
     'nn-tst': {
