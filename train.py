@@ -8,7 +8,7 @@ import os
 import datetime
 
 from math import sqrt
-from shutil import copy2
+from shutil import copy2, rmtree
 
 np.random.seed(1337)
 
@@ -21,6 +21,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Ridge
 from sklearn.svm import LinearSVR
 from sklearn.neighbors import LSHForest
+from sklearn.model_selection import ParameterGrid
+from sklearn.datasets import dump_svmlight_file
 
 from keras.models import Sequential
 from keras.layers import Dense, Dropout, Lambda
@@ -30,9 +32,10 @@ from keras.optimizers import SGD, Adam, Nadam, Adadelta
 from keras.callbacks import ReduceLROnPlateau, LearningRateScheduler
 from keras import backend as K
 from keras import initializations
-from keras_util import ExponentialMovingAverage
+from keras_util import ExponentialMovingAverage, batch_generator
 
 from pylightgbm.models import GBMRegressor
+from fastFM import als
 
 from scipy.stats import boxcox
 
@@ -40,29 +43,6 @@ from bayes_opt import BayesianOptimization
 
 from tqdm import tqdm
 from util import Dataset, load_prediction, hstack
-
-
-def batch_generator(X, y=None, batch_size=128, shuffle=False):
-    index = np.arange(X.shape[0])
-
-    while True:
-        if shuffle:
-            np.random.shuffle(index)
-
-        batch_start = 0
-        while batch_start < X.shape[0]:
-            batch_index = index[batch_start:batch_start + batch_size]
-            batch_start += batch_size
-
-            X_batch = X[batch_index, :]
-
-            if sp.issparse(X_batch):
-                X_batch = X_batch.toarray()
-
-            if y is None:
-                yield X_batch
-            else:
-                yield X_batch, y[batch_index]
 
 
 class CategoricalMeanEncoded(object):
@@ -136,7 +116,7 @@ class Xgb(object):
         'nthread': -1,
     }
 
-    def __init__(self, params, n_iter=400, transform_y=None):
+    def __init__(self, params, n_iter=400, transform_y=None, param_grid=None, huber=None):
         self.params = self.default_params.copy()
 
         for k in params:
@@ -144,8 +124,45 @@ class Xgb(object):
 
         self.n_iter = n_iter
         self.transform_y = transform_y
+        self.param_grid = param_grid
+        self.huber = huber
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
+        if self.transform_y is not None:
+            y_tr, y_inv = self.transform_y
+
+            y_train = y_tr(y_train)
+            y_eval = y_tr(y_eval)
+
+            feval = lambda y_pred, y_true: ('mae', mean_absolute_error(y_inv(y_true.get_label()), y_inv(y_pred)))
+        else:
+            feval = None
+
+        if self.huber is not None:
+            fobj = self.huber_approx_obj
+        else:
+            fobj = None
+
+        dtrain = xgb.DMatrix(X_train, label=y_train)
+        deval = xgb.DMatrix(X_eval, label=y_eval)
+
+        params = self.params.copy()
+        params['seed'] = seed
+        params['base_score'] = y_train.mean()
+
+        self.model = xgb.train(params, dtrain, self.n_iter, [(deval, 'eval'), (dtrain, 'train')], fobj, feval, verbose_eval=10)
+
+    def predict(self, X):
+        pred = self.model.predict(xgb.DMatrix(X))
+
+        if self.transform_y is not None:
+            _, y_inv = self.transform_y
+
+            pred = y_inv(pred)
+
+        return pred
+
+    def optimize(self, X_train, y_train, X_eval, y_eval, seed=42):
         if self.transform_y is not None:
             y_tr, y_inv = self.transform_y
 
@@ -159,20 +176,28 @@ class Xgb(object):
         dtrain = xgb.DMatrix(X_train, label=y_train)
         deval = xgb.DMatrix(X_eval, label=y_eval)
 
-        params = self.params.copy()
-        params['seed'] = seed
+        for ps in ParameterGrid(self.param_grid):
+            print "Using %s" % str(ps)
 
-        self.model = xgb.train(params, dtrain, self.n_iter, [(deval, 'eval'), (dtrain, 'train')], verbose_eval=10, feval=feval)
+            params = self.params.copy()
+            params['seed'] = seed
 
-    def predict(self, X):
-        pred = self.model.predict(xgb.DMatrix(X))
+            for k in ps:
+                params[k] = ps[k]
 
-        if self.transform_y is not None:
-            _, y_inv = self.transform_y
+            model = xgb.train(params, dtrain, self.n_iter, [(deval, 'eval'), (dtrain, 'train')], objective, feval, verbose_eval=10)
+            print "Result for %s: %.5f" % (str(ps), feval(model.predict(deval), deval)[1])
 
-            pred = y_inv(pred)
+    def huber_approx_obj(self, preds, dtrain):
+        d = preds - dtrain.get_label()
 
-        return pred
+        scale = 1 + (d / self.huber) ** 2
+        scale_sqrt = np.sqrt(scale)
+
+        grad = d / scale_sqrt
+        hess = 1 / scale / scale_sqrt
+
+        return grad, hess
 
 
 class LightGBM(object):
@@ -206,6 +231,83 @@ class LightGBM(object):
 
     def predict(self, X):
         pred = self.model.predict(X)
+
+        if self.transform_y is not None:
+            _, y_inv = self.transform_y
+
+            pred = y_inv(pred)
+
+        return pred
+
+
+class LibFM(object):
+
+    default_params = {
+    }
+
+    def __init__(self, params={}, transform_y=None):
+        self.params = self.default_params.copy()
+
+        for k in params:
+            self.params[k] = params[k]
+
+        self.transform_y = transform_y
+        self.exec_path = 'libFM'
+        self.tmp_dir = "libfm_models/{}".format(datetime.datetime.now().strftime('%Y%m%d-%H%M'))
+
+    def __del__(self):
+        if os.path.exists(self.tmp_dir):
+            rmtree(self.tmp_dir)
+        pass
+
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
+        if self.transform_y is not None:
+            y_tr, y_inv = self.transform_y
+
+            y_train = y_tr(y_train)
+            y_eval = y_tr(y_eval)
+
+        if not os.path.exists(self.tmp_dir):
+            os.makedirs(self.tmp_dir)
+
+        train_file = os.path.join(self.tmp_dir, 'train.svm')
+        eval_file = os.path.join(self.tmp_dir, 'eval.svm')
+        out_file = os.path.join(self.tmp_dir, 'out.txt')
+
+        with open(train_file, 'w') as f:
+            dump_svmlight_file(X_train, y_train, f=f)
+
+        with open(eval_file, 'w') as f:
+            dump_svmlight_file(X_eval, y_eval, f=f)
+
+        params = self.params.copy()
+        params['seed'] = seed
+        params['task'] = 'r'
+        params['train'] = train_file
+        params['test'] = eval_file
+        params['out'] = out_file
+        params['save_model'] = os.path.join(self.tmp_dir, 'model.libfm')
+        params = " ".join("-{} {}".format(k, params[k]) for k in params)
+
+        os.system("{} {}".format(self.exec_path, params))
+
+    def predict(self, X):
+        pred_file = os.path.join(self.tmp_dir, 'pred.svm')
+        out_file = os.path.join(self.tmp_dir, 'out.txt')
+
+        with open(pred_file, 'w') as f:
+            dump_svmlight_file(X, np.zeros(X.shape[0]), f=f)
+
+        params = {}
+        params['task'] = 'r'
+        params['test'] = pred_file
+        params['out'] = out_file
+        params['load_model'] = os.path.join(self.tmp_dir, 'model.libfm')
+        params = " ".join("-{} {}".format(k, params[k]) for k in params)
+
+        os.system("{} {}".format(self.exec_path, params))
+
+        pred = pd.read_csv(out_file, header=None).values.flatten()
 
         if self.transform_y is not None:
             _, y_inv = self.transform_y
@@ -418,6 +520,9 @@ l1_predictions = [
     '20161019-2334-nn5-1142.50482',
 
     '20161020-2123-lgb1-1135.87331',
+
+    '20161021-2054-xgb7-1140.67644',
+    '20161022-1736-xgb7-1138.66039',
 ]
 
 l2_predictions = [
@@ -489,6 +594,29 @@ presets = {
         }, n_iter=3000, transform_y=(norm_y, norm_y_inv)),
     },
 
+    'xgb6': {
+        'features': ['numeric', 'categorical_encoded'],
+        'model': Xgb({
+            'max_depth': 7,
+            'eta': 0.03,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'min_child_weight': 4,
+        }, n_iter=2000, transform_y=(norm_y, norm_y_inv), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+    },
+
+    'xgb7': {
+        'features': ['numeric', 'categorical_encoded'],
+        #'n_bags': 2,
+        'model': Xgb({
+            'max_depth': 7,
+            'eta': 0.05,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'min_child_weight': 4,
+        }, n_iter=2000, huber=100, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+    },
+
     'lgb1': {
         'features': ['numeric', 'categorical_encoded'],
         #'n_bags': 2,
@@ -502,6 +630,16 @@ presets = {
             'bagging_freq': 5,
             'metric_freq': 10
         }, transform_y=(norm_y, norm_y_inv)),
+    },
+
+    'libfm1': {
+        'features': ['numeric_scaled', 'categorical_dummy'],
+        'model': LibFM(transform_y=(np.log, np.exp)),
+    },
+
+    'fastfm1': {
+        'features': ['numeric_scaled', 'categorical_dummy'],
+        'model': Sklearn(als.FMRegression(n_iter=1000, init_stdev=0.1, rank=2, l2_reg_w=0.1, l2_reg_V=0.5), transform_y=(np.log, np.exp), param_grid={'C': (1e-3, 1e3)}),
     },
 
     'nn-tst': {
@@ -578,16 +716,16 @@ presets = {
 
     'l2_nn': {
         'predictions': l1_predictions,
-        'n_splits': 1,
+        'n_bags': 2,
         'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'layers': [50], 'dropouts': [0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3), ExponentialMovingAverage()]}),  # ReduceLROnPlateau(patience=5, factor=0.2) LearningRateScheduler(lambda i: 2e-3 / sqrt(i+1))
     },
 
     'l2_nn2': {
-        'features': ['numeric_scaled', 'categorical_dummy'],
+        'features': ['categorical_dummy'],
         'predictions': l1_predictions,
         'n_bags': 2,
         'n_splits': 2,
-        'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 700, 'batch_size': 128, 'layers': [50, 20]}),
+        'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 700, 'batch_size': 128, 'layers': [400, 100]}),
     },
 
     'l2_lr': {
@@ -600,11 +738,11 @@ presets = {
         'predictions': l1_predictions,
         'model': Xgb({
             'max_depth': 4,
-            'eta': 0.06,
-            'colsample_bytree': 0.7,
-            'subsample': 0.95,
+            'eta': 0.03,
+            'colsample_bytree': 0.3,
+            'subsample': 0.8,
             #'min_child_weight': 5,
-        }, n_iter=550, transform_y=(norm_y, norm_y_inv)),
+        }, n_iter=5000, transform_y=(norm_y, norm_y_inv)),
     },
 
     'l3_nn': {

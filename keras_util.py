@@ -7,6 +7,7 @@
 # http://cs231n.github.io/neural-networks-3/
 
 import numpy as np
+import scipy.sparse as sp
 
 from keras import backend as K
 from keras.callbacks import Callback
@@ -134,3 +135,26 @@ class ExponentialMovingAverage(Callback):
         for sym_weight in collect_trainable_weights(model2):
             K.set_value(sym_weight, self.mv_trainable_weights_vals[sym_weight.name])
         return model2
+
+
+def batch_generator(X, y=None, batch_size=128, shuffle=False):
+    index = np.arange(X.shape[0])
+
+    while True:
+        if shuffle:
+            np.random.shuffle(index)
+
+        batch_start = 0
+        while batch_start < X.shape[0]:
+            batch_index = index[batch_start:batch_start + batch_size]
+            batch_start += batch_size
+
+            X_batch = X[batch_index, :]
+
+            if sp.issparse(X_batch):
+                X_batch = X_batch.toarray()
+
+            if y is None:
+                yield X_batch
+            else:
+                yield X_batch, y[batch_index]
