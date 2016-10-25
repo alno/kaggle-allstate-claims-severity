@@ -23,6 +23,7 @@ from sklearn.svm import LinearSVR
 from sklearn.neighbors import LSHForest
 from sklearn.model_selection import ParameterGrid
 from sklearn.datasets import dump_svmlight_file
+from sklearn.utils import shuffle
 
 from keras.models import Sequential
 from keras.layers import Dense, Dropout, Lambda
@@ -41,7 +42,6 @@ from scipy.stats import boxcox
 
 from bayes_opt import BayesianOptimization
 
-from tqdm import tqdm
 from util import Dataset, load_prediction, hstack
 
 
@@ -49,11 +49,12 @@ class CategoricalMeanEncoded(object):
 
     requirements = ['categorical']
 
-    def __init__(self, C=100, loo=False, noisy=True, random_state=11):
+    def __init__(self, C=100, loo=False, noisy=True, noise_std=None, random_state=11):
         self.random_state = np.random.RandomState(random_state)
         self.C = C
         self.loo = loo
         self.noisy = noisy
+        self.noise_std = noise_std
 
     def fit_transform(self, ds):
         train_cat = ds['categorical']
@@ -61,7 +62,7 @@ class CategoricalMeanEncoded(object):
         train_res = np.zeros(train_cat.shape, dtype=np.float32)
 
         self.global_target_mean = train_target.mean()
-        self.global_target_std = train_target.std()
+        self.global_target_std = train_target.std() if self.noise_std is None else self.noise_std
 
         self.target_sums = {}
         self.target_cnts = {}
@@ -97,7 +98,7 @@ class CategoricalMeanEncoded(object):
         test_res = np.zeros(test_cat.shape, dtype=np.float32)
 
         for col in xrange(test_res.shape[1]):
-            test_series = pd.Series(test_res[:, col])
+            test_series = pd.Series(test_cat[:, col])
 
             test_res_num = test_series.map(self.target_sums[col]).fillna(0.0) + self.global_target_mean * self.C
             test_res_den = test_series.map(self.target_cnts[col]).fillna(0.0) + self.C
@@ -116,7 +117,7 @@ class Xgb(object):
         'nthread': -1,
     }
 
-    def __init__(self, params, n_iter=400, transform_y=None, param_grid=None, huber=None):
+    def __init__(self, params, n_iter=400, transform_y=None, param_grid=None, huber=None, fair=None):
         self.params = self.default_params.copy()
 
         for k in params:
@@ -126,6 +127,7 @@ class Xgb(object):
         self.transform_y = transform_y
         self.param_grid = param_grid
         self.huber = huber
+        self.fair = fair
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
         if self.transform_y is not None:
@@ -140,6 +142,8 @@ class Xgb(object):
 
         if self.huber is not None:
             fobj = self.huber_approx_obj
+        elif self.fair is not None:
+            fobj = self.fair_obj
         else:
             fobj = None
 
@@ -148,7 +152,7 @@ class Xgb(object):
 
         params = self.params.copy()
         params['seed'] = seed
-        params['base_score'] = y_train.mean()
+        params['base_score'] = np.median(y_train)
 
         self.model = xgb.train(params, dtrain, self.n_iter, [(deval, 'eval'), (dtrain, 'train')], fobj, feval, verbose_eval=10)
 
@@ -196,6 +200,17 @@ class Xgb(object):
 
         grad = d / scale_sqrt
         hess = 1 / scale / scale_sqrt
+
+        return grad, hess
+
+    def fair_obj(self, preds, dtrain):
+        x = preds - dtrain.get_label()
+        c = self.fair
+
+        den = np.abs(x)+c
+
+        grad = c*x / den
+        hess = c*c / den ** 2
 
         return grad, hess
 
@@ -256,8 +271,8 @@ class LibFM(object):
         self.tmp_dir = "libfm_models/{}".format(datetime.datetime.now().strftime('%Y%m%d-%H%M'))
 
     def __del__(self):
-        if os.path.exists(self.tmp_dir):
-            rmtree(self.tmp_dir)
+        #if os.path.exists(self.tmp_dir):
+        #    rmtree(self.tmp_dir)
         pass
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
@@ -274,9 +289,11 @@ class LibFM(object):
         eval_file = os.path.join(self.tmp_dir, 'eval.svm')
         out_file = os.path.join(self.tmp_dir, 'out.txt')
 
+        print "Exporting train..."
         with open(train_file, 'w') as f:
-            dump_svmlight_file(X_train, y_train, f=f)
+            dump_svmlight_file(*shuffle(X_train, y_train, random_state=seed), f=f)
 
+        print "Exporting eval..."
         with open(eval_file, 'w') as f:
             dump_svmlight_file(X_eval, y_eval, f=f)
 
@@ -289,23 +306,33 @@ class LibFM(object):
         params['save_model'] = os.path.join(self.tmp_dir, 'model.libfm')
         params = " ".join("-{} {}".format(k, params[k]) for k in params)
 
-        os.system("{} {}".format(self.exec_path, params))
+        command = "{} {}".format(self.exec_path, params)
+
+        print command
+        os.system(command)
 
     def predict(self, X):
+        train_file = os.path.join(self.tmp_dir, 'train.svm')
         pred_file = os.path.join(self.tmp_dir, 'pred.svm')
         out_file = os.path.join(self.tmp_dir, 'out.txt')
 
+        print "Exporting pred..."
         with open(pred_file, 'w') as f:
             dump_svmlight_file(X, np.zeros(X.shape[0]), f=f)
 
-        params = {}
+        params = self.params.copy()
+        params['iter'] = 0
         params['task'] = 'r'
+        params['train'] = train_file
         params['test'] = pred_file
         params['out'] = out_file
         params['load_model'] = os.path.join(self.tmp_dir, 'model.libfm')
         params = " ".join("-{} {}".format(k, params[k]) for k in params)
 
-        os.system("{} {}".format(self.exec_path, params))
+        command = "{} {}".format(self.exec_path, params)
+
+        print command
+        os.system(command)
 
         pred = pd.read_csv(out_file, header=None).values.flatten()
 
@@ -485,6 +512,7 @@ def norm_y_inv(y_bc):
 parser = argparse.ArgumentParser(description='Train model')
 parser.add_argument('preset', type=str, help='model preset (features and hyperparams)')
 parser.add_argument('--optimize', action='store_true', help='optimize model params')
+parser.add_argument('--fold', type=int, help='specify fold')
 
 
 args = parser.parse_args()
@@ -523,6 +551,11 @@ l1_predictions = [
 
     '20161021-2054-xgb7-1140.67644',
     '20161022-1736-xgb7-1138.66039',
+
+    '20161022-2023-xgbf1-1137.23245',
+    '20161023-0643-xgbf1-1133.28725',
+
+    '20161025-1849-xgbf3-1133.20314',
 ]
 
 l2_predictions = [
@@ -535,17 +568,6 @@ presets = {
     'xgb-tst': {
         'features': ['numeric'],
         'model': Xgb({}, n_iter=10),
-    },
-
-    'xgb1': {
-        'features': ['numeric', 'categorical_encoded'],
-        'model': Xgb({
-            'max_depth': 7,
-            'eta': 0.1,
-            'colsample_bytree': 0.5,
-            'subsample': 0.95,
-            'min_child_weight': 5,
-        }, n_iter=400, transform_y=(norm_y, norm_y_inv)),
     },
 
     'xgb2': {
@@ -582,18 +604,6 @@ presets = {
         }, n_iter=3000, transform_y=(norm_y, norm_y_inv)),
     },
 
-    'xgb5': {
-        'features': ['numeric', 'categorical_encoded'],
-        #'n_bags': 2,
-        'model': Xgb({
-            'max_depth': 7,
-            'eta': 0.02,
-            'colsample_bytree': 0.4,
-            'subsample': 0.95,
-            'min_child_weight': 4,
-        }, n_iter=3000, transform_y=(norm_y, norm_y_inv)),
-    },
-
     'xgb6': {
         'features': ['numeric', 'categorical_encoded'],
         'model': Xgb({
@@ -606,6 +616,18 @@ presets = {
     },
 
     'xgb7': {
+        'features': ['numeric'],
+        'feature_builders': [CategoricalMeanEncoded(C=10000, noisy=False, loo=False)],
+        'model': Xgb({
+            'max_depth': 7,
+            'eta': 0.03,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'min_child_weight': 4,
+        }, n_iter=2000, transform_y=(norm_y, norm_y_inv), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+    },
+
+    'xgbh1': {
         'features': ['numeric', 'categorical_encoded'],
         #'n_bags': 2,
         'model': Xgb({
@@ -617,12 +639,70 @@ presets = {
         }, n_iter=2000, huber=100, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
     },
 
+    'xgbf1': {
+        'features': ['numeric', 'categorical_encoded'],
+        'n_bags': 3,
+        'model': Xgb({
+            'max_depth': 7,
+            'eta': 0.05,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'min_child_weight': 4,
+            #'gamma': 0.01,
+            'alpha': 0.0005,
+            #'lambda': 1.0,
+        }, n_iter=1100, fair=1, transform_y=(norm_y, norm_y_inv), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+    },
+
+    'xgbf-tst': {
+        'features': ['numeric', 'categorical_encoded'],
+        'n_bags': 3,
+        'model': Xgb({
+            'max_depth': 8,
+            'eta': 0.05,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'gamma': 0.45,
+            'alpha': 0.0005,
+            #'lambda': 1.0,
+        }, n_iter=1100, fair=1, transform_y=(norm_y, norm_y_inv), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+    },
+
+
+    'xgbf2': {
+        'features': ['numeric'],
+        'feature_builders': [CategoricalMeanEncoded(C=10000, noisy=True, noise_std=0.1, loo=False)],
+        'n_bags': 2,
+        'model': Xgb({
+            'max_depth': 7,
+            'eta': 0.05,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'min_child_weight': 4,
+            'alpha': 0.0005,
+        }, n_iter=1100, fair=1, transform_y=(norm_y, norm_y_inv), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+    },
+
+    'xgbf3': {
+        'features': ['numeric', 'categorical_encoded'],
+        'n_bags': 3,
+        'model': Xgb({
+            'max_depth': 8,
+            'eta': 0.04,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'gamma': 0.45,
+            'alpha': 0.0005,
+            #'lambda': 1.0,
+        }, n_iter=1320, fair=1, transform_y=(norm_y, norm_y_inv), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+    },
+
     'lgb1': {
         'features': ['numeric', 'categorical_encoded'],
-        #'n_bags': 2,
+        'n_bags': 2,
         'model': LightGBM({
-            'num_iterations': 4000,
-            'learning_rate': 0.006,
+            'num_iterations': 5500,
+            'learning_rate': 0.005,
             'num_leaves': 250,
             'min_data_in_leaf': 3,
             'feature_fraction': 0.25,
@@ -632,9 +712,31 @@ presets = {
         }, transform_y=(norm_y, norm_y_inv)),
     },
 
+    'lgb2': {
+        'features': ['numeric'],
+        'feature_builders': [CategoricalMeanEncoded(C=10000, noisy=True, noise_std=0.1, loo=False)],
+        #'n_bags': 2,
+        'model': LightGBM({
+            'num_iterations': 4000,
+            'learning_rate': 0.006,
+            'num_leaves': 250,
+            'min_data_in_leaf': 2,
+            'feature_fraction': 0.25,
+            'bagging_fraction': 0.95,
+            'bagging_freq': 5,
+            'metric_freq': 10
+        }, transform_y=(norm_y, norm_y_inv)),
+    },
+
     'libfm1': {
         'features': ['numeric_scaled', 'categorical_dummy'],
-        'model': LibFM(transform_y=(np.log, np.exp)),
+        'model': LibFM(params={
+            'method': 'sgd',
+            'learn_rate': 0.0001,
+            'iter': 300,
+            'dim': '1,1,12',
+            'regular': '0,0,0.0002'
+        }, transform_y=(np.log, np.exp)),
     },
 
     'fastfm1': {
@@ -661,15 +763,17 @@ presets = {
     'nn3': {
         'features': ['numeric'],
         'feature_builders': [CategoricalMeanEncoded(1000)],
-        'model': Keras({'l1': 1e-6, 'l2': 1e-6, 'n_epoch': 100, 'batch_size': 48, 'layers': [200, 100], 'dropouts': [0.2, 0.1]}),
+        'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 80, 'batch_size': 128, 'layers': [400, 200], 'dropouts': [0.4, 0.2], 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=True),
     },
 
     'nn4': {
+        'n_bags': 2,
         'features': ['svd'],
-        'model': Keras({'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 25, 'batch_size': 128, 'layers': [300, 100], 'dropouts': [0.3, 0.1]}),
+        'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 80, 'batch_size': 128, 'layers': [400, 200], 'dropouts': [0.4, 0.2], 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=True),
     },
 
     'nn5': {
+        'n_bags': 2,
         'features': ['numeric_scaled', 'categorical_dummy'],
         'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 70, 'batch_size': 128, 'layers': [400, 200], 'dropouts': [0.4, 0.2], 'optimizer': Adam(decay=1e-5), 'callbacks': [ReduceLROnPlateau(patience=10, factor=0.2, cooldown=5), ExponentialMovingAverage()]}, scale=False),
     },
@@ -717,7 +821,7 @@ presets = {
     'l2_nn': {
         'predictions': l1_predictions,
         'n_bags': 2,
-        'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'layers': [50], 'dropouts': [0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3), ExponentialMovingAverage()]}),  # ReduceLROnPlateau(patience=5, factor=0.2) LearningRateScheduler(lambda i: 2e-3 / sqrt(i+1))
+        'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'layers': [50], 'dropouts': [0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3), ExponentialMovingAverage()]}),
     },
 
     'l2_nn2': {
@@ -806,6 +910,9 @@ for split in xrange(n_splits):
     print "Training split %d..." % split
 
     for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_folds, shuffle=True, random_state=2016 + 17*split)):
+        if args.fold is not None and fold != args.fold:
+            continue
+
         print
         print "  Fold %d..." % fold
 
