@@ -8,7 +8,7 @@ prepare() {
 
 train() {
   echo "Training $1..."
-  python -u train.py $1 | tee logs/$1.log
+  python -u train.py --threads 4 $1 | tee logs/$1.log
 }
 
 
@@ -16,6 +16,7 @@ train() {
 prepare basic
 prepare numeric-boxcox
 prepare numeric-scaled
+prepare numeric-rank-norm
 prepare categorical-encoded
 prepare categorical-counts
 prepare categorical-dummy

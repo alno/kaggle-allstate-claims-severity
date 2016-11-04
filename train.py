@@ -422,10 +422,11 @@ class LshForest(object):
 
 class Keras(object):
 
-    def __init__(self, params, transform_y=None, scale=True):
+    def __init__(self, params, transform_y=None, scale=True, loss='mae'):
         self.params = params
         self.transform_y = transform_y
         self.scale = scale
+        self.loss = loss
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
         params = self.params
@@ -465,7 +466,7 @@ class Keras(object):
 
         self.model.add(Dense(1, init='he_normal'))
 
-        self.model.compile(optimizer=params.get('optimizer', 'adadelta'), loss='mae')
+        self.model.compile(optimizer=params.get('optimizer', 'adadelta'), loss=self.loss)
 
         self.model.fit_generator(
             generator=batch_generator(X_train, y_train, params['batch_size'], True), samples_per_epoch=X_train.shape[0],
@@ -539,6 +540,7 @@ l1_predictions = [
     '20161027-2048-lr-ce-1291.06963',
     '20161027-2110-lr-cd-1248.84696',
     '20161027-2111-lr-svd-1247.38512',
+    '20161030-0044-lr-cd-nr-1248.64251',
 
     '20161027-2330-et-ce-1217.14724',
     '20161027-2340-rf-ce-1200.99200',
@@ -896,6 +898,24 @@ presets = {
         'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 80, 'batch_size': 128, 'layers': [400, 200], 'dropouts': [0.4, 0.2], 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False),
     },
 
+    'nn-cd-2': {
+        'features': ['numeric_scaled', 'categorical_dummy'],
+        'n_bags': 2,
+        'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 80, 'batch_size': 128, 'layers': [400, 200], 'dropouts': [0.4, 0.2], 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False, transform_y=(np.log, np.exp)),
+    },
+
+    'nn-cd-3': {
+        'features': ['numeric_scaled', 'categorical_dummy'],
+        #'n_bags': 2,
+        'model': Keras(lambda: {'l1': 1e-6, 'l2': 1e-6, 'n_epoch': 20, 'batch_size': 128, 'layers': [300, 200], 'dropouts': [0.3, 0.2], 'optimizer': SGD(1e-5, momentum=0.8, nesterov=True, decay=1e-5), 'callbacks': [ExponentialMovingAverage()]}, scale=False, transform_y=(np.log, np.exp), loss='mse'),
+    },
+
+    'nn-cd-4': {
+        'features': ['numeric_rank_norm', 'categorical_dummy'],
+        'n_bags': 2,
+        'model': Keras(lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 80, 'batch_size': 128, 'layers': [400, 200], 'dropouts': [0.4, 0.2], 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False),
+    },
+
     'nn-svd': {
         'features': ['svd'],
         'n_bags': 2,
@@ -937,6 +957,11 @@ presets = {
 
     'lr-cd': {
         'features': ['numeric_scaled', 'categorical_dummy'],
+        'model': Sklearn(Ridge(1e-3), transform_y=(np.log, np.exp), param_grid={'C': (1e-3, 1e3)}),
+    },
+
+    'lr-cd-nr': {
+        'features': ['numeric_rank_norm', 'categorical_dummy'],
         'model': Sklearn(Ridge(1e-3), transform_y=(np.log, np.exp), param_grid={'C': (1e-3, 1e3)}),
     },
 
