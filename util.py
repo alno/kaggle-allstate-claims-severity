@@ -63,7 +63,8 @@ class Dataset(object):
         'categorical_counts': 'd2',
         'categorical_encoded': 'd2',
         'categorical_dummy': 's2',
-        'svd': 'd2'
+        'svd': 'd2',
+        'cluster_rbf': 'd2'
     }
 
     parts = part_types.keys()
