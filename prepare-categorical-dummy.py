@@ -6,7 +6,7 @@ from util import Dataset
 
 print "Loading data..."
 
-min_freq = 20
+min_freq = 10
 
 train_cat = Dataset.load_part('train', 'categorical')
 test_cat = Dataset.load_part('test', 'categorical')
