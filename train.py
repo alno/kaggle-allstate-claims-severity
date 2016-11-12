@@ -609,6 +609,8 @@ LightGBM.default_params['num_threads'] = args.threads
 
 n_folds = 8
 
+y_aggregator = np.median
+
 l1_predictions = [
 
     #'20161027-1345-xgb-ce-1137.71847',
@@ -1244,7 +1246,7 @@ if args.optimize:
 
 print "Loading test data..."
 test_x = load_x('test', preset)
-test_p = pd.Series(0.0, index=Dataset.load_part('test', 'id'))
+test_p = np.zeros((test_x.shape[0], n_bags * n_folds))
 test_r = Dataset.load('test', parts=np.unique([b.requirements for b in feature_builders]))
 
 maes = []
@@ -1283,32 +1285,32 @@ for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_fol
         fold_eval_x = hstack(fold_eval_x)
         fold_test_x = hstack(fold_test_x)
 
-    fold_eval_p = np.zeros((fold_eval_x.shape[0], ))
-    fold_test_p = np.zeros((fold_test_x.shape[0], ))
+    eval_p = np.zeros((fold_eval_x.shape[0], n_bags))
 
-    for i in xrange(n_bags):
-        print "    Training model %d..." % i
+    for bag in xrange(n_bags):
+        print "    Training model %d..." % bag
 
         # Fit model
         model = preset['model']
-        model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y, seed=42 + 13*i)
+        model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y, seed=42 + 13*bag)
 
         print "    Predicting eval..."
-        fold_eval_p += model.predict(fold_eval_x)
+        eval_p[:, bag] += model.predict(fold_eval_x)
 
         print "    Predicting test..."
-        fold_test_p += model.predict(fold_test_x)
+        test_p[:, fold * n_bags + bag] += model.predict(fold_test_x)
 
-    # Normalize train/test predictions
-    fold_eval_p /= n_bags
-    fold_test_p /= n_bags
+    print "  MAE of mean: %.5f" % mean_absolute_error(fold_eval_y, np.mean(eval_p, axis=1))
+    print "  MAE of median: %.5f" % mean_absolute_error(fold_eval_y, np.median(eval_p, axis=1))
+
+    # Aggregate eval predictions
+    eval_p = y_aggregator(eval_p, axis=1)
 
     # Normalize train predictions
-    train_p.iloc[fold_eval_idx] += fold_eval_p
-    test_p += fold_test_p
+    train_p.iloc[fold_eval_idx] += eval_p
 
     # Calculate err
-    maes.append(mean_absolute_error(fold_eval_y, fold_eval_p))
+    maes.append(mean_absolute_error(fold_eval_y, eval_p))
 
     print "  MAE: %.5f" % maes[-1]
 
@@ -1318,7 +1320,7 @@ for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_fol
 
 ## Analyzing predictions
 
-test_p /= n_folds
+test_p = pd.Series(y_aggregator(test_p, axis=1), index=Dataset.load_part('test', 'id'))
 
 mae_mean = np.mean(maes)
 mae_std = np.std(maes)
