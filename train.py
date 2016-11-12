@@ -6,6 +6,7 @@ import scipy.sparse as sp
 import argparse
 import os
 import datetime
+import itertools
 
 from math import sqrt
 from shutil import copy2, rmtree
@@ -44,21 +45,25 @@ from bayes_opt import BayesianOptimization
 from util import Dataset, load_prediction, hstack
 
 
+categoricals = Dataset.get_part_features('categorical')
+
+
 class CategoricalMeanEncoded(object):
 
     requirements = ['categorical']
 
-    def __init__(self, C=100, loo=False, noisy=True, noise_std=None, random_state=11):
+    def __init__(self, C=100, loo=False, noisy=True, noise_std=None, random_state=11, combinations=[]):
         self.random_state = np.random.RandomState(random_state)
         self.C = C
         self.loo = loo
         self.noisy = noisy
         self.noise_std = noise_std
+        self.combinations = [map(categoricals.index, comb) for comb in combinations]
 
     def fit_transform(self, ds):
         train_cat = ds['categorical']
-        train_target = pd.Series(np.log(ds['loss']))
-        train_res = np.zeros(train_cat.shape, dtype=np.float32)
+        train_target = pd.Series(np.log(ds['loss'] + 100))
+        train_res = np.zeros((train_cat.shape[0], len(categoricals) + len(self.combinations)), dtype=np.float32)
 
         self.global_target_mean = train_target.mean()
         self.global_target_std = train_target.std() if self.noise_std is None else self.noise_std
@@ -66,45 +71,55 @@ class CategoricalMeanEncoded(object):
         self.target_sums = {}
         self.target_cnts = {}
 
-        for col in xrange(train_cat.shape[1]):
-            train_series = pd.Series(train_cat[:, col])
+        for col in xrange(len(categoricals)):
+            train_res[:, col] = self.fit_transform_column(col, train_target, pd.Series(train_cat[:, col]))
 
-            self.target_sums[col] = train_target.groupby(train_series).sum()
-            self.target_cnts[col] = train_target.groupby(train_series).count()
-
-            if self.noisy:
-                train_res_reg = self.random_state.normal(
-                    loc=self.global_target_mean * self.C,
-                    scale=self.global_target_std * np.sqrt(self.C),
-                    size=len(train_series)
-                )
-            else:
-                train_res_reg = self.global_target_mean * self.C
-
-            train_res_num = train_series.map(self.target_sums[col]) + train_res_reg
-            train_res_den = train_series.map(self.target_cnts[col]) + self.C
-
-            if self.loo:  # Leave-one-out mode, exclude current observation
-                train_res_num -= train_target
-                train_res_den -= 1
-
-            train_res[:, col] = np.exp(train_res_num / train_res_den).values
+        for idx, comb in enumerate(self.combinations):
+            col = idx + len(categoricals)
+            train_res[:, col] = self.fit_transform_column(col, train_target, pd.Series(map(''.join, train_cat[:, comb])))
 
         return train_res
 
     def transform(self, ds):
         test_cat = ds['categorical']
-        test_res = np.zeros(test_cat.shape, dtype=np.float32)
+        test_res = np.zeros((test_cat.shape[0], len(categoricals) + len(self.combinations)), dtype=np.float32)
 
-        for col in xrange(test_res.shape[1]):
-            test_series = pd.Series(test_cat[:, col])
+        for col in xrange(len(categoricals)):
+            test_res[:, col] = self.transform_column(col, pd.Series(test_cat[:, col]))
 
-            test_res_num = test_series.map(self.target_sums[col]).fillna(0.0) + self.global_target_mean * self.C
-            test_res_den = test_series.map(self.target_cnts[col]).fillna(0.0) + self.C
-
-            test_res[:, col] = np.exp(test_res_num / test_res_den).values
+        for idx, comb in enumerate(self.combinations):
+            col = idx + len(categoricals)
+            test_res[:, col] = self.transform_column(col, pd.Series(map(''.join, test_cat[:, comb])))
 
         return test_res
+
+    def fit_transform_column(self, col, train_target, train_series):
+        self.target_sums[col] = train_target.groupby(train_series).sum()
+        self.target_cnts[col] = train_target.groupby(train_series).count()
+
+        if self.noisy:
+            train_res_reg = self.random_state.normal(
+                loc=self.global_target_mean * self.C,
+                scale=self.global_target_std * np.sqrt(self.C),
+                size=len(train_series)
+            )
+        else:
+            train_res_reg = self.global_target_mean * self.C
+
+        train_res_num = train_series.map(self.target_sums[col]) + train_res_reg
+        train_res_den = train_series.map(self.target_cnts[col]) + self.C
+
+        if self.loo:  # Leave-one-out mode, exclude current observation
+            train_res_num -= train_target
+            train_res_den -= 1
+
+        return np.exp(train_res_num / train_res_den).values
+
+    def transform_column(self, col, test_series):
+        test_res_num = test_series.map(self.target_sums[col]).fillna(0.0) + self.global_target_mean * self.C
+        test_res_den = test_series.map(self.target_cnts[col]).fillna(0.0) + self.C
+
+        return np.exp(test_res_num / test_res_den).values
 
 
 class Xgb(object):
@@ -630,8 +645,10 @@ l1_predictions = [
     #'20161027-2008-lgb-ce-1136.32506',
 
     '20161027-2048-lr-ce-1291.06963',
-    '20161027-2110-lr-cd-1248.84696',
-    '20161027-2111-lr-svd-1247.38512',
+    #'20161027-2110-lr-cd-1248.84696',
+    '20161112-1927-lr-cd-1247.90719',
+    #'20161027-2111-lr-svd-1247.38512',
+    '20161112-2028-lr-svd-1248.10532',
     '20161030-0044-lr-cd-nr-1248.64251',
 
     '20161027-2330-et-ce-1217.14724',
@@ -662,6 +679,8 @@ l1_predictions = [
     '20161019-2334-nn5-1142.50482',
 
     '20161105-1053-nn-cd-2-1135.09238',
+
+    '20161112-1903-nn-cd-3-1133.89751',
 
     '20161028-1005-nn-svd-1144.31187',
 
@@ -918,7 +937,11 @@ presets = {
 
     'xgbf-cm-tst': {
         'features': ['numeric'],
-        'feature_builders': [CategoricalMeanEncoded(C=10000, noisy=True, noise_std=0.1, loo=False)],
+        'feature_builders': [
+            CategoricalMeanEncoded(
+                C=10000, noisy=True, noise_std=0.1, loo=False,
+                combinations=itertools.combinations('cat80,cat87,cat57,cat12,cat79,cat10,cat7,cat89,cat2,cat72,cat81,cat11,cat1,cat13,cat9,cat3,cat16,cat90,cat23,cat36,cat73,cat103,cat40,cat28,cat111,cat6,cat76,cat50,cat5,cat4,cat14,cat38,cat24,cat82,cat25'.split(','), 2)
+            )],
         'n_bags': 2,
         'model': Xgb({
             'max_depth': 7,
@@ -1090,6 +1113,12 @@ presets = {
         'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 80, 'batch_size': 128, 'layers': [400, 200], 'dropouts': [0.4, 0.2], 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False),
     },
 
+    'nn-svd-2': {
+        'features': ['svd'],
+        'n_bags': 2,
+        'model': Keras(nn_mlp_2, lambda: {'l1': 1e-7, 'l2': 1e-7, 'n_epoch': 55, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.2, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False, transform_y=y_log_ofs(200)),
+    },
+
     'nn-cm-tst': {
         'features': ['numeric'],
         'feature_builders': [CategoricalMeanEncoded(1000)],
@@ -1141,6 +1170,16 @@ presets = {
         'model': Sklearn(Ridge(1e-3), transform_y=y_log, param_grid={'C': (1e-3, 1e3)}),
     },
 
+    'lr-cm': {
+        'features': ['numeric_scaled'],
+        'feature_builders': [
+            CategoricalMeanEncoded(
+                C=10000, noisy=True, noise_std=0.01, loo=True,
+                combinations=itertools.combinations('cat80,cat87,cat57,cat12,cat79,cat10,cat7,cat89,cat2,cat72,cat81,cat11,cat1,cat13,cat9,cat3,cat16,cat90,cat23,cat36,cat73,cat103,cat40,cat28,cat111,cat6,cat76,cat50,cat5,cat4,cat14,cat38,cat24,cat82,cat25'.split(','), 2)
+            )],
+        'model': Sklearn(Ridge(1e-3), transform_y=y_log, param_grid={'C': (1e-3, 1e3)}),
+    },
+
     'lr-cd-nr': {
         'features': ['numeric_rank_norm', 'categorical_dummy'],
         'model': Sklearn(Ridge(1e-3), transform_y=y_log, param_grid={'C': (1e-3, 1e3)}),
@@ -1179,8 +1218,8 @@ presets = {
 
     'l2-nn-tst': {
         'predictions': l1_predictions,
-        'n_bags': 2,
-        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'layers': [50, 50], 'dropouts': [0.2, 0.2], 'batch_norm': True, 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3), ExponentialMovingAverage()]}),
+        'n_bags': 4,
+        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-7, 'n_epoch': 30, 'batch_size': 128, 'layers': [50], 'dropouts': [0.15], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3), ExponentialMovingAverage()]}),
     },
 
     'l2-lr': {
@@ -1191,15 +1230,14 @@ presets = {
 
     'l2-xgbf': {
         'predictions': l1_predictions,
+        'n_bags': 2,
         'model': Xgb({
-            'max_depth': 8,
-            'eta': 0.03,
+            'max_depth': 4,
+            'eta': 0.02,
             'colsample_bytree': 0.3,
-            'subsample': 0.5,
-            'gamma': 0.01,
-            'alpha': 0.0005,
-            #'min_child_weight': 5,
-        }, n_iter=5000, fair=1, transform_y=y_log),
+            'subsample': 0.75,
+            'min_child_weight': 6,
+        }, n_iter=1100, fair=1.0, transform_y=y_log_ofs(200)),
     },
 
     'l3-nn': {
