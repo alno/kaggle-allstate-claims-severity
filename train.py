@@ -26,6 +26,8 @@ from sklearn.model_selection import ParameterGrid
 from sklearn.datasets import dump_svmlight_file
 from sklearn.utils import shuffle
 
+from sklearn_util import MedianExtraTreesRegressor
+
 from keras.models import Sequential
 from keras.layers import Dense, MaxoutDense, Dropout, Lambda
 from keras.layers.advanced_activations import PReLU
@@ -63,41 +65,23 @@ class CategoricalAlphaEncoded(object):
         test_res = np.zeros((test_cat.shape[0], len(categoricals) + len(self.combinations)), dtype=np.float32)
 
         for col in xrange(len(categoricals)):
-            test_res[:, col] = self.transform_column(col, pd.Series(test_cat[:, col]))
+            test_res[:, col] = self.transform_column(test_cat[:, col])
 
         for idx, comb in enumerate(self.combinations):
             col = idx + len(categoricals)
-            test_res[:, col] = self.transform_column(col, pd.Series(map(''.join, test_cat[:, comb])))
+            test_res[:, col] = self.transform_column(map(''.join, test_cat[:, comb]))
 
         return test_res
 
-    def fit_transform_column(self, col, train_target, train_series):
-        self.target_sums[col] = train_target.groupby(train_series).sum()
-        self.target_cnts[col] = train_target.groupby(train_series).count()
+    def transform_column(self, arr):
+        def encode(charcode):
+            r = 0
+            ln = len(charcode)
+            for i in range(ln):
+                r += (ord(charcode[i])-ord('A')+1)*26**(ln-i-1)
+            return r
 
-        if self.noisy:
-            train_res_reg = self.random_state.normal(
-                loc=self.global_target_mean * self.C,
-                scale=self.global_target_std * np.sqrt(self.C),
-                size=len(train_series)
-            )
-        else:
-            train_res_reg = self.global_target_mean * self.C
-
-        train_res_num = train_series.map(self.target_sums[col]) + train_res_reg
-        train_res_den = train_series.map(self.target_cnts[col]) + self.C
-
-        if self.loo:  # Leave-one-out mode, exclude current observation
-            train_res_num -= train_target
-            train_res_den -= 1
-
-        return np.exp(train_res_num / train_res_den).values
-
-    def transform_column(self, col, test_series):
-        test_res_num = test_series.map(self.target_sums[col]).fillna(0.0) + self.global_target_mean * self.C
-        test_res_den = test_series.map(self.target_cnts[col]).fillna(0.0) + self.C
-
-        return np.exp(test_res_num / test_res_den).values
+        return np.array(map(encode, arr))
 
     def get_feature_names(self):
         return categoricals + ['_'.join(categoricals[c] for c in comb) for comb in self.combinations]
@@ -703,8 +687,6 @@ LightGBM.default_params['num_threads'] = args.threads
 
 n_folds = 8
 
-y_aggregator = np.median
-
 l1_predictions = [
 
     #'20161027-1345-xgb-ce-1137.71847',
@@ -784,7 +766,9 @@ l1_predictions = [
 
 l2_predictions = [
     '20161112-2136-l2-lr-1124.72277',
-    '20161112-1624-l2-nn-1120.42637',
+    #'20161113-0020-l2-et-1124.59154',
+    #'20161112-1624-l2-nn-1120.42637',
+    '20161113-0206-l2-nn-1119.67630',
     '20161112-2302-l2-xgbf-1121.74439',
 ]
 
@@ -980,18 +964,38 @@ presets = {
         }, n_iter=1250, fair=150, fair_decay=0.001),
     },
 
-
-    'xgbf-ce-tst': {
-        'features': ['numeric', 'categorical_encoded'],
-        #'n_bags': 3,
+    'xgbf-ce-6': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13')]
+            )],
+        'n_bags': 4,
         'model': Xgb({
-            'max_depth': 9,
+            'max_depth': 13,
             'eta': 0.04,
             'colsample_bytree': 0.4,
             'subsample': 0.95,
-            #'gamma': 2e4,
-            'alpha': 0.9,
-        }, n_iter=5000, fair=150, fair_decay=0.001, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+            'gamma': 0.6,
+            'alpha': 0.5,
+        }, n_iter=2700, fair=1, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+    },
+
+    'xgbf-ce-tst': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13')]
+            )],
+        'n_bags': 2,
+        'model': Xgb({
+            'max_depth': 13,
+            'eta': 0.04,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'gamma': 0.6,
+            'alpha': 0.5,
+        }, n_iter=2700, fair=1, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
     },
 
     'xgbf-tst': {
@@ -1164,7 +1168,7 @@ presets = {
 
     'nn-cd-3': {
         'features': ['numeric_scaled', 'categorical_dummy'],
-        'n_bags': 2,
+        'n_bags': 3,
         'model': Keras(nn_mlp_2, lambda: {'l1': 1e-7, 'l2': 1e-7, 'n_epoch': 55, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.2, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False, transform_y=y_log_ofs(200)),
     },
 
@@ -1313,10 +1317,21 @@ presets = {
         }, n_iter=1100, fair=1.0, transform_y=y_log_ofs(200)),
     },
 
+    'l2-et': {
+        'predictions': l1_predictions,
+        'model': Sklearn(ExtraTreesRegressor(100, max_depth=11, max_features=0.8, n_jobs=-1), transform_y=y_log_ofs(200), param_grid={'min_samples_leaf': (1, 40), 'max_features': (0.05, 0.8), 'max_depth': (3, 20)}),
+    },
+
+    'l2-rf': {
+        'predictions': l1_predictions,
+        'model': Sklearn(RandomForestRegressor(100, max_depth=9, max_features=0.8, min_samples_leaf=23, n_jobs=-1), transform_y=y_log_ofs(200), param_grid={'min_samples_leaf': (1, 40), 'max_features': (0.05, 0.8), 'max_depth': (3, 20)}),
+    },
+
     'l3-nn': {
         'predictions': l2_predictions,
-        'n_bags': 3,
+        'n_bags': 4,
         'model': Keras(nn_lr, lambda: {'l2': 1e-5, 'n_epoch': 1, 'batch_size': 128, 'optimizer': SGD(lr=2.0, momentum=0.8, nesterov=True, decay=1e-4)}),
+        'agg': np.mean,
     },
 }
 
@@ -1327,6 +1342,8 @@ preset = presets[args.preset]
 feature_builders = preset.get('feature_builders', [])
 
 n_bags = preset.get('n_bags', 1)
+
+y_aggregator = preset.get('agg', np.median)
 
 print "Loading train data..."
 train_x = load_x('train', preset)
