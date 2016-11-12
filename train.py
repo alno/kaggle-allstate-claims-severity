@@ -26,14 +26,13 @@ from sklearn.datasets import dump_svmlight_file
 from sklearn.utils import shuffle
 
 from keras.models import Sequential
-from keras.layers import Dense, Dropout, Lambda
+from keras.layers import Dense, MaxoutDense, Dropout, Lambda
 from keras.layers.advanced_activations import PReLU
 from keras.layers.normalization import BatchNormalization
-from keras.regularizers import l1l2
 from keras.optimizers import SGD, Adam, Nadam, Adadelta
 from keras.callbacks import ReduceLROnPlateau, LearningRateScheduler
 from keras import backend as K
-from keras import initializations
+from keras import regularizers
 from keras_util import ExponentialMovingAverage, batch_generator
 
 from pylightgbm.models import GBMRegressor
@@ -208,14 +207,14 @@ class Xgb(object):
 
     def fair_obj(self, preds, dtrain):
         x = preds - dtrain.get_label()
-        c = self.fair / np.exp(self.fair_decay * self.iter)
+        c = self.fair
 
-        self.iter += 1
-
-        den = np.abs(x)+c
+        den = np.abs(x) * np.exp(self.fair_decay * self.iter) + c
 
         grad = c*x / den
         hess = c*c / den ** 2
+
+        self.iter += 1
 
         return grad, hess
 
@@ -475,11 +474,29 @@ class Keras(object):
         return pred
 
 
+def regularizer(params):
+    if 'l1' in params and 'l2' in params:
+        return regularizers.l1l2(params['l1'], params['l2'])
+    elif 'l1' in params:
+        return regularizers.l1(params['l1'])
+    elif 'l2' in params:
+        return regularizers.l2(params['l2'])
+    else:
+        return None
+
+
+def nn_lr(input_shape, params):
+    model = Sequential()
+    model.add(Dense(1, init='he_normal', input_shape=input_shape))
+
+    return model
+
+
 def nn_mlp(input_shape, params):
     model = Sequential()
 
     for i, layer_size in enumerate(params['layers']):
-        reg = l1l2(params['l1'], params['l2'])
+        reg = regularizer(params)
 
         if i == 0:
             model.add(Dense(layer_size, init='he_normal', W_regularizer=reg, input_shape=input_shape))
@@ -493,6 +510,52 @@ def nn_mlp(input_shape, params):
             model.add(Dropout(params['dropouts'][i]))
 
         model.add(PReLU())
+
+    model.add(Dense(1, init='he_normal'))
+
+    return model
+
+
+def nn_mlp_2(input_shape, params):
+    model = Sequential()
+
+    for i, layer_size in enumerate(params['layers']):
+        reg = regularizer(params)
+
+        if i == 0:
+            model.add(Dense(layer_size, init='he_normal', W_regularizer=reg, input_shape=input_shape))
+        else:
+            model.add(Dense(layer_size, init='he_normal', W_regularizer=reg))
+
+        model.add(PReLU())
+
+        if params.get('batch_norm', False):
+            model.add(BatchNormalization())
+
+        if 'dropouts' in params:
+            model.add(Dropout(params['dropouts'][i]))
+
+    model.add(Dense(1, init='he_normal'))
+
+    return model
+
+
+def nn_maxout(input_shape, params):
+    model = Sequential()
+
+    for i, layer_size in enumerate(params['layers']):
+        reg = regularizer(params)
+
+        if i == 0:
+            model.add(MaxoutDense(layer_size, init='he_normal', W_regularizer=reg, input_shape=input_shape))
+        else:
+            model.add(MaxoutDense(layer_size, init='he_normal', W_regularizer=reg))
+
+#        if params.get('batch_norm', False):
+#            model.add(BatchNormalization())
+
+        if 'dropouts' in params:
+            model.add(Dropout(params['dropouts'][i]))
 
     model.add(Dense(1, init='he_normal'))
 
@@ -536,7 +599,7 @@ parser = argparse.ArgumentParser(description='Train model')
 parser.add_argument('preset', type=str, help='model preset (features and hyperparams)')
 parser.add_argument('--optimize', action='store_true', help='optimize model params')
 parser.add_argument('--fold', type=int, help='specify fold')
-parser.add_argument('--threads', type=int, default=-1, help='specify thread count')
+parser.add_argument('--threads', type=int, default=4, help='specify thread count')
 
 
 args = parser.parse_args()
@@ -596,6 +659,9 @@ l1_predictions = [
 
     '20161026-1055-lgb1-1135.48359',
 
+    '20161112-0120-lgb-cd-1-1134.15660',
+    '20161112-0551-lgb-cd-2-1132.30663',
+
     #'20161021-2054-xgb7-1140.67644',
     '20161022-1736-xgb7-1138.66039',
     '20161027-1932-xgb-ce-2-1134.04010',
@@ -609,6 +675,8 @@ l1_predictions = [
     '20161028-0039-xgbf-ce-2-1133.25472',
     '20161027-2321-xgbf-ce-3-1130.03141',
     '20161028-1909-xgbf-ce-4-1129.65181',
+
+    '20161105-2104-xgbf-ce-5-1138.75039',
 
     '20161026-0127-libfm1-1195.55162',
     '20161028-1032-libfm-svd-1180.69290',
@@ -800,17 +868,30 @@ presets = {
         }, n_iter=2700, fair=1, transform_y=(np.log, np.exp), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
     },
 
+    'xgbf-ce-5': {
+        'features': ['numeric', 'categorical_encoded'],
+        #'n_bags': 3,
+        'model': Xgb({
+            'max_depth': 9,
+            'eta': 0.04,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'alpha': 0.9,
+        }, n_iter=1250, fair=150, fair_decay=0.001),
+    },
+
+
     'xgbf-ce-tst': {
         'features': ['numeric', 'categorical_encoded'],
         #'n_bags': 3,
         'model': Xgb({
-            'max_depth': 15,
+            'max_depth': 9,
             'eta': 0.04,
             'colsample_bytree': 0.4,
             'subsample': 0.95,
-            'gamma': 1.5,
+            #'gamma': 2e4,
             'alpha': 0.9,
-        }, n_iter=5000, fair=200, fair_decay=0.001, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=5000, fair=150, fair_decay=0.001, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
     },
 
     'xgbf-tst': {
@@ -869,6 +950,52 @@ presets = {
             'bagging_freq': 5,
             'metric_freq': 10
         }, transform_y=(norm_y, norm_y_inv)),
+    },
+
+    'lgb-cd-1': {
+        'features': ['numeric', 'categorical_dummy'],
+        'n_bags': 2,
+        'model': LightGBM({
+            'num_iterations': 2150,
+            'learning_rate': 0.01,
+            'num_leaves': 200,
+            'min_data_in_leaf': 8,
+            'feature_fraction': 0.3,
+            'bagging_fraction': 0.8,
+            'bagging_freq': 20,
+            'metric_freq': 10
+        }, transform_y=(norm_y, norm_y_inv)),
+    },
+
+    'lgb-cd-2': {
+        'features': ['numeric', 'categorical_dummy'],
+        'n_bags': 2,
+        'model': LightGBM({
+            'num_iterations': 2900,
+            'learning_rate': 0.01,
+            'num_leaves': 200,
+            'min_data_in_leaf': 8,
+            'feature_fraction': 0.3,
+            'bagging_fraction': 0.8,
+            'bagging_freq': 20,
+            'metric_freq': 10
+        }, transform_y=(log_200, log_200_inv)),
+    },
+
+    'lgb-cd-tst': {
+        'features': ['numeric', 'categorical_dummy'],
+        'n_bags': 2,
+        'model': LightGBM({
+            'num_iterations': 5000,
+            'learning_rate': 0.01,
+            'num_leaves': 200,
+            'min_data_in_leaf': 8,
+            'feature_fraction': 0.3,
+            'bagging_fraction': 0.8,
+            'bagging_freq': 20,
+            'metric_freq': 10,
+            'metric': 'l1',
+        }, transform_y=(log_200, log_200_inv)),
     },
 
     'lgb-cm-tst': {
@@ -931,10 +1058,22 @@ presets = {
         'model': Keras(nn_mlp, lambda: {'l1': 2e-5, 'l2': 2e-5, 'n_epoch': 40, 'batch_size': 128, 'layers': [400, 200, 100], 'dropouts': [0.5, 0.4, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False),
     },
 
+    'nn-cd-3': {
+        'features': ['numeric_scaled', 'categorical_dummy'],
+        'n_bags': 2,
+        'model': Keras(nn_mlp_2, lambda: {'l1': 1e-7, 'l2': 1e-7, 'n_epoch': 55, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.2, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False, transform_y=(log_200, log_200_inv)),
+    },
+
+    'nn-cd-lr': {
+        'features': ['numeric_scaled', 'categorical_dummy'],
+        #'n_bags': 2,
+        'model': Keras(nn_lr, lambda: {'n_epoch': 3, 'batch_size': 128, 'layers': [], 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False, transform_y=(log_200, log_200_inv)),
+    },
+
     'nn-cd-tst': {
         'features': ['numeric_scaled', 'categorical_dummy'],
         #'n_bags': 2,
-        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 800, 'batch_size': 128, 'layers': [400, 200, 100], 'dropouts': [0.5, 0.4, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False),
+        'model': Keras(nn_mlp_2, lambda: {'l2': 1e-5, 'n_epoch': 800, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.2, 0.2], 'batch_norm': True, 'optimizer': 'adadelta', 'callbacks': [ExponentialMovingAverage()]}, scale=False, transform_y=(log_200, log_200_inv)),
     },
 
     'nn-svd': {
