@@ -48,6 +48,61 @@ from util import Dataset, load_prediction, hstack
 categoricals = Dataset.get_part_features('categorical')
 
 
+class CategoricalAlphaEncoded(object):
+
+    requirements = ['categorical']
+
+    def __init__(self, combinations=[]):
+        self.combinations = [map(categoricals.index, comb) for comb in combinations]
+
+    def fit_transform(self, ds):
+        return self.transform(ds)
+
+    def transform(self, ds):
+        test_cat = ds['categorical']
+        test_res = np.zeros((test_cat.shape[0], len(categoricals) + len(self.combinations)), dtype=np.float32)
+
+        for col in xrange(len(categoricals)):
+            test_res[:, col] = self.transform_column(col, pd.Series(test_cat[:, col]))
+
+        for idx, comb in enumerate(self.combinations):
+            col = idx + len(categoricals)
+            test_res[:, col] = self.transform_column(col, pd.Series(map(''.join, test_cat[:, comb])))
+
+        return test_res
+
+    def fit_transform_column(self, col, train_target, train_series):
+        self.target_sums[col] = train_target.groupby(train_series).sum()
+        self.target_cnts[col] = train_target.groupby(train_series).count()
+
+        if self.noisy:
+            train_res_reg = self.random_state.normal(
+                loc=self.global_target_mean * self.C,
+                scale=self.global_target_std * np.sqrt(self.C),
+                size=len(train_series)
+            )
+        else:
+            train_res_reg = self.global_target_mean * self.C
+
+        train_res_num = train_series.map(self.target_sums[col]) + train_res_reg
+        train_res_den = train_series.map(self.target_cnts[col]) + self.C
+
+        if self.loo:  # Leave-one-out mode, exclude current observation
+            train_res_num -= train_target
+            train_res_den -= 1
+
+        return np.exp(train_res_num / train_res_den).values
+
+    def transform_column(self, col, test_series):
+        test_res_num = test_series.map(self.target_sums[col]).fillna(0.0) + self.global_target_mean * self.C
+        test_res_den = test_series.map(self.target_cnts[col]).fillna(0.0) + self.C
+
+        return np.exp(test_res_num / test_res_den).values
+
+    def get_feature_names(self):
+        return categoricals + ['_'.join(categoricals[c] for c in comb) for comb in self.combinations]
+
+
 class CategoricalMeanEncoded(object):
 
     requirements = ['categorical']
@@ -121,6 +176,9 @@ class CategoricalMeanEncoded(object):
 
         return np.exp(test_res_num / test_res_den).values
 
+    def get_feature_names(self):
+        return categoricals + ['_'.join(categoricals[c] for c in comb) for comb in self.combinations]
+
 
 class Xgb(object):
 
@@ -144,7 +202,7 @@ class Xgb(object):
         self.fair = fair
         self.fair_decay = fair_decay
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None):
         if self.transform_y is not None:
             y_tr, y_inv = self.transform_y
 
@@ -162,8 +220,8 @@ class Xgb(object):
         else:
             fobj = None
 
-        dtrain = xgb.DMatrix(X_train, label=y_train)
-        deval = xgb.DMatrix(X_eval, label=y_eval)
+        dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=feature_names)
+        deval = xgb.DMatrix(X_eval, label=y_eval, feature_names=feature_names)
 
         params = self.params.copy()
         params['seed'] = seed
@@ -171,11 +229,12 @@ class Xgb(object):
 
         self.iter = 0
         self.model = xgb.train(params, dtrain, self.n_iter, [(deval, 'eval'), (dtrain, 'train')], fobj, feval, verbose_eval=20)
+        self.feature_names = feature_names
 
         print "    Feature importances: %s" % ', '.join('%s: %d' % t for t in sorted(self.model.get_fscore().items(), key=lambda t: -t[1]))
 
     def predict(self, X):
-        pred = self.model.predict(xgb.DMatrix(X))
+        pred = self.model.predict(xgb.DMatrix(X, feature_names=self.feature_names))
 
         if self.transform_y is not None:
             _, y_inv = self.transform_y
@@ -251,7 +310,7 @@ class LightGBM(object):
 
         self.transform_y = transform_y
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None):
         if self.transform_y is not None:
             y_tr, y_inv = self.transform_y
 
@@ -296,7 +355,7 @@ class LibFM(object):
         #    rmtree(self.tmp_dir)
         pass
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None):
         if self.transform_y is not None:
             y_tr, y_inv = self.transform_y
 
@@ -372,7 +431,7 @@ class Sklearn(object):
         self.transform_y = transform_y
         self.param_grid = param_grid
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None):
         if self.transform_y is not None:
             y_tr, _ = self.transform_y
             y_train = y_tr(y_train)
@@ -417,7 +476,7 @@ class LshForest(object):
     def __init__(self, transform_y=None):
         self.transform_y = transform_y
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None):
         if self.transform_y is not None:
             y_tr, _ = self.transform_y
             y_train = y_tr(y_train)
@@ -450,7 +509,7 @@ class Keras(object):
         self.scale = scale
         self.loss = loss
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None):
         params = self.params
 
         if callable(params):
@@ -504,7 +563,7 @@ def regularizer(params):
 
 def nn_lr(input_shape, params):
     model = Sequential()
-    model.add(Dense(1, init='he_normal', input_shape=input_shape))
+    model.add(Dense(1, input_shape=input_shape))
 
     return model
 
@@ -588,6 +647,18 @@ def load_x(ds, preset):
         prediction_parts = map(preset['prediction_transform'], prediction_parts)
 
     return hstack(feature_parts + prediction_parts)
+
+
+def extract_feature_names(preset):
+    x = []
+
+    for part in preset.get('features', []):
+        x += Dataset.get_part_features(part)
+
+    for pred in preset.get('predictions', []):
+        x.append(pred)
+
+    return x
 
 
 norm_y_lambda = 0.7
@@ -712,9 +783,9 @@ l1_predictions = [
 ]
 
 l2_predictions = [
-    '20161015-0118-l2_lr-1135.83902',
-    '20161015-0120-l2_nn-1133.22684',
-    '20161017-0116-l2_nn-1129.48210',
+    '20161112-2136-l2-lr-1124.72277',
+    '20161112-1624-l2-nn-1120.42637',
+    '20161112-2302-l2-xgbf-1121.74439',
 ]
 
 presets = {
@@ -952,7 +1023,7 @@ presets = {
             'subsample': 0.95,
             'min_child_weight': 4,
             'alpha': 0.0005,
-        }, n_iter=1100, fair=1, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=500, fair=1, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
     },
 
     'lgb-ce': {
@@ -1097,16 +1168,16 @@ presets = {
         'model': Keras(nn_mlp_2, lambda: {'l1': 1e-7, 'l2': 1e-7, 'n_epoch': 55, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.2, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False, transform_y=y_log_ofs(200)),
     },
 
+    'nn-cd-tst': {
+        'features': ['numeric_scaled', 'categorical_dummy'],
+        'n_bags': 2,
+        'model': Keras(nn_mlp_2, lambda: {'l1': 1e-7, 'l2': 1e-7, 'n_epoch': 100, 'batch_size': 128, 'layers': [400, 200, 150], 'dropouts': [0.4, 0.2, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False, transform_y=y_log_ofs(200)),
+    },
+
     'nn-cd-lr': {
         'features': ['numeric_scaled', 'categorical_dummy'],
         #'n_bags': 2,
         'model': Keras(nn_lr, lambda: {'n_epoch': 3, 'batch_size': 128, 'layers': [], 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage()]}, scale=False, transform_y=y_log_ofs(200)),
-    },
-
-    'nn-cd-tst': {
-        'features': ['numeric_scaled', 'categorical_dummy'],
-        #'n_bags': 2,
-        'model': Keras(nn_mlp_2, lambda: {'l2': 1e-5, 'n_epoch': 800, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.2, 0.2], 'batch_norm': True, 'optimizer': 'adadelta', 'callbacks': [ExponentialMovingAverage()]}, scale=False, transform_y=y_log_ofs(200)),
     },
 
     'nn-svd': {
@@ -1244,7 +1315,8 @@ presets = {
 
     'l3-nn': {
         'predictions': l2_predictions,
-        'model': Keras(nn_mlp, {'l1': 1e-3, 'l2': 1e-3, 'lr': 1e-2, 'n_epoch': 10, 'batch_size': 48, 'layers': [10]}),
+        'n_bags': 3,
+        'model': Keras(nn_lr, lambda: {'l2': 1e-5, 'n_epoch': 1, 'batch_size': 128, 'optimizer': SGD(lr=2.0, momentum=0.8, nesterov=True, decay=1e-4)}),
     },
 }
 
@@ -1261,6 +1333,8 @@ train_x = load_x('train', preset)
 train_y = Dataset.load_part('train', 'loss')
 train_p = pd.Series(0.0, index=Dataset.load_part('train', 'id'))
 train_r = Dataset.load('train', parts=np.unique(sum([b.requirements for b in feature_builders], ['loss'])))
+
+feature_names = extract_feature_names(preset)
 
 
 if args.optimize:
@@ -1315,6 +1389,8 @@ for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_fol
     fold_test_x = test_x
     fold_test_r = test_r
 
+    fold_feature_names = list(feature_names)
+
     if len(feature_builders) > 0:  # TODO: Move inside of bagging loop
         print "    Building per-fold features..."
 
@@ -1326,6 +1402,7 @@ for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_fol
             fold_train_x.append(fb.fit_transform(fold_train_r))
             fold_eval_x.append(fb.transform(fold_eval_r))
             fold_test_x.append(fb.transform(fold_test_r))
+            fold_feature_names += fb.get_feature_names()
 
         fold_train_x = hstack(fold_train_x)
         fold_eval_x = hstack(fold_eval_x)
@@ -1338,7 +1415,7 @@ for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_fol
 
         # Fit model
         model = preset['model']
-        model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y, seed=42 + 13*bag)
+        model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y, seed=42 + 13*bag, feature_names=fold_feature_names)
 
         print "    Predicting eval..."
         eval_p[:, bag] += model.predict(fold_eval_x)
