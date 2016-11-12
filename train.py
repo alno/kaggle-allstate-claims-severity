@@ -172,6 +172,8 @@ class Xgb(object):
         self.iter = 0
         self.model = xgb.train(params, dtrain, self.n_iter, [(deval, 'eval'), (dtrain, 'train')], fobj, feval, verbose_eval=20)
 
+        print "    Feature importances: %s" % ', '.join('%s: %d' % t for t in sorted(self.model.get_fscore().items(), key=lambda t: -t[1]))
+
     def predict(self, X):
         pred = self.model.predict(xgb.DMatrix(X))
 
