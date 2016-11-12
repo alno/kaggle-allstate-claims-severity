@@ -1207,7 +1207,6 @@ preset = presets[args.preset]
 feature_builders = preset.get('feature_builders', [])
 
 n_bags = preset.get('n_bags', 1)
-n_splits = preset.get('n_splits', 1)
 
 print "Loading train data..."
 train_x = load_x('train', preset)
@@ -1250,81 +1249,76 @@ test_r = Dataset.load('test', parts=np.unique([b.requirements for b in feature_b
 
 maes = []
 
-for split in xrange(n_splits):
+for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_folds, shuffle=True, random_state=2016)):
+    if args.fold is not None and fold != args.fold:
+        continue
+
     print
-    print "Training split %d..." % split
+    print "  Fold %d..." % fold
 
-    for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_folds, shuffle=True, random_state=2016 + 17*split)):
-        if args.fold is not None and fold != args.fold:
-            continue
+    fold_train_x = train_x[fold_train_idx]
+    fold_train_y = train_y[fold_train_idx]
+    fold_train_r = train_r.slice(fold_train_idx)
 
-        print
-        print "  Fold %d..." % fold
+    fold_eval_x = train_x[fold_eval_idx]
+    fold_eval_y = train_y[fold_eval_idx]
+    fold_eval_r = train_r.slice(fold_eval_idx)
 
-        fold_train_x = train_x[fold_train_idx]
-        fold_train_y = train_y[fold_train_idx]
-        fold_train_r = train_r.slice(fold_train_idx)
+    fold_test_x = test_x
+    fold_test_r = test_r
 
-        fold_eval_x = train_x[fold_eval_idx]
-        fold_eval_y = train_y[fold_eval_idx]
-        fold_eval_r = train_r.slice(fold_eval_idx)
+    if len(feature_builders) > 0:  # TODO: Move inside of bagging loop
+        print "    Building per-fold features..."
 
-        fold_test_x = test_x
-        fold_test_r = test_r
+        fold_train_x = [fold_train_x]
+        fold_eval_x = [fold_eval_x]
+        fold_test_x = [fold_test_x]
 
-        if len(feature_builders) > 0:  # TODO: Move inside of bagging loop
-            print "    Building per-fold features..."
+        for fb in feature_builders:
+            fold_train_x.append(fb.fit_transform(fold_train_r))
+            fold_eval_x.append(fb.transform(fold_eval_r))
+            fold_test_x.append(fb.transform(fold_test_r))
 
-            fold_train_x = [fold_train_x]
-            fold_eval_x = [fold_eval_x]
-            fold_test_x = [fold_test_x]
+        fold_train_x = hstack(fold_train_x)
+        fold_eval_x = hstack(fold_eval_x)
+        fold_test_x = hstack(fold_test_x)
 
-            for fb in feature_builders:
-                fold_train_x.append(fb.fit_transform(fold_train_r))
-                fold_eval_x.append(fb.transform(fold_eval_r))
-                fold_test_x.append(fb.transform(fold_test_r))
+    fold_eval_p = np.zeros((fold_eval_x.shape[0], ))
+    fold_test_p = np.zeros((fold_test_x.shape[0], ))
 
-            fold_train_x = hstack(fold_train_x)
-            fold_eval_x = hstack(fold_eval_x)
-            fold_test_x = hstack(fold_test_x)
+    for i in xrange(n_bags):
+        print "    Training model %d..." % i
 
-        fold_eval_p = np.zeros((fold_eval_x.shape[0], ))
-        fold_test_p = np.zeros((fold_test_x.shape[0], ))
+        # Fit model
+        model = preset['model']
+        model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y, seed=42 + 13*i)
 
-        for i in xrange(n_bags):
-            print "    Training model %d..." % i
+        print "    Predicting eval..."
+        fold_eval_p += model.predict(fold_eval_x)
 
-            # Fit model
-            model = preset['model']
-            model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y, seed=42 + 13*i + 29*split)
+        print "    Predicting test..."
+        fold_test_p += model.predict(fold_test_x)
 
-            print "    Predicting eval..."
-            fold_eval_p += model.predict(fold_eval_x)
+    # Normalize train/test predictions
+    fold_eval_p /= n_bags
+    fold_test_p /= n_bags
 
-            print "    Predicting test..."
-            fold_test_p += model.predict(fold_test_x)
+    # Normalize train predictions
+    train_p.iloc[fold_eval_idx] += fold_eval_p
+    test_p += fold_test_p
 
-        # Normalize train/test predictions
-        fold_eval_p /= n_bags
-        fold_test_p /= n_bags
+    # Calculate err
+    maes.append(mean_absolute_error(fold_eval_y, fold_eval_p))
 
-        # Normalize train predictions
-        train_p.iloc[fold_eval_idx] += fold_eval_p
-        test_p += fold_test_p
+    print "  MAE: %.5f" % maes[-1]
 
-        # Calculate err
-        maes.append(mean_absolute_error(fold_eval_y, fold_eval_p))
-
-        print "  MAE: %.5f" % maes[-1]
-
-        # Free mem
-        del fold_train_x, fold_train_y, fold_eval_x, fold_eval_y
+    # Free mem
+    del fold_train_x, fold_train_y, fold_eval_x, fold_eval_y
 
 
 ## Analyzing predictions
 
-test_p /= n_splits * n_folds
-train_p /= n_splits
+test_p /= n_folds
 
 mae_mean = np.mean(maes)
 mae_std = np.std(maes)
