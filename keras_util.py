@@ -132,8 +132,10 @@ class ExponentialMovingAverage(Callback):
         state. Then copy moving averaged weights over."""
         self.model.save(filepath, overwrite=True)
         model2 = load_model(filepath, custom_objects=self.custom_objects)
-        for sym_weight in collect_trainable_weights(model2):
-            K.set_value(sym_weight, self.mv_trainable_weights_vals[sym_weight.name])
+
+        for w2, w in zip(collect_trainable_weights(model2), collect_trainable_weights(self.model)):
+            K.set_value(w2, self.mv_trainable_weights_vals[w.name])
+
         return model2
 
 

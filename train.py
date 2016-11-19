@@ -639,7 +639,7 @@ def nn_maxout(input_shape, params):
 def load_x(ds, preset):
     feature_parts = [Dataset.load_part(ds, part) for part in preset.get('features', [])]
     prediction_parts = [load_prediction(ds, p) for p in preset.get('predictions', [])]
-    prediction_parts = [p.clip(lower=0.1).reshape((p.shape[0], 1)) for p in prediction_parts]
+    prediction_parts = [p.clip(lower=0.1).values.reshape((p.shape[0], 1)) for p in prediction_parts]
 
     if 'prediction_transform' in preset:
         prediction_parts = map(preset['prediction_transform'], prediction_parts)
