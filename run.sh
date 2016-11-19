@@ -8,7 +8,7 @@ prepare() {
 
 train() {
   echo "Training $1..."
-  python -u train.py --threads 4 $1 | tee logs/$1.log
+  time python -u train.py --threads 4 $1 | tee logs/$1.log
 }
 
 

@@ -59,6 +59,7 @@ class Dataset(object):
         'numeric_boxcox': 'd2',
         'numeric_rank_norm': 'd2',
         'numeric_combinations': 'd2',
+        'numeric_edges': 's2',
         'categorical': 'd2',
         'categorical_counts': 'd2',
         'categorical_encoded': 'd2',
