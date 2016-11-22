@@ -15,7 +15,7 @@ np.random.seed(1337)
 
 from sklearn.metrics import mean_absolute_error
 from sklearn.cross_validation import KFold, train_test_split
-from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor, GradientBoostingRegressor
+from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -164,7 +164,18 @@ class CategoricalMeanEncoded(object):
         return categoricals + ['_'.join(categoricals[c] for c in comb) for comb in self.combinations]
 
 
-class Xgb(object):
+class BaseAlgo(object):
+
+    def fit_predict(self, train, val=None, test=None, **kwa):
+        self.fit(train[0], train[1], val[0] if val else None, val[1] if val else None, **kwa)
+
+        val_pred = self.predict(val[0])
+        test_pred = self.predict(test[0])
+
+        return val_pred, test_pred
+
+
+class Xgb(BaseAlgo):
 
     default_params = {
         'objective': 'reg:linear',
@@ -293,7 +304,7 @@ class Xgb(object):
         return grad, hess
 
 
-class LightGBM(object):
+class LightGBM(BaseAlgo):
 
     default_params = {
         'exec_path': 'lightgbm',
@@ -333,7 +344,7 @@ class LightGBM(object):
         return pred
 
 
-class LibFM(object):
+class LibFM(BaseAlgo):
 
     default_params = {
     }
@@ -422,7 +433,7 @@ class LibFM(object):
         return pred
 
 
-class Sklearn(object):
+class Sklearn(BaseAlgo):
 
     def __init__(self, model, transform_y=None, param_grid=None):
         self.model = model
@@ -469,7 +480,7 @@ class Sklearn(object):
         print "Best mae: %.5f, params: %s" % (opt.res['max']['max_val'], opt.res['mas']['max_params'])
 
 
-class LshForest(object):
+class LshForest(BaseAlgo):
 
     def __init__(self, transform_y=None):
         self.transform_y = transform_y
@@ -498,7 +509,7 @@ class LshForest(object):
         return pred
 
 
-class Keras(object):
+class Keras(BaseAlgo):
 
     def __init__(self, arch, params, transform_y=None, scale=True, loss='mae'):
         self.arch = arch
@@ -701,24 +712,14 @@ LightGBM.default_params['num_threads'] = args.threads
 
 n_folds = 8
 
+
 l1_predictions = [
-
-    #'20161027-1345-xgb-ce-1137.71847',
-    #'20161027-1518-xgb-ce-2-1135.34796',
-
-    #'20161027-1541-xgbf-ce-1139.27459',
-    #'20161027-1606-xgbf-ce-2-1136.41797',
-
-    #'20161027-1832-libfm-cd-1200.11201',
-
-    #'20161027-2008-lgb-ce-1136.32506',
-
     '20161027-2048-lr-ce-1291.06963',
-    #'20161027-2110-lr-cd-1248.84696',
     '20161112-1927-lr-cd-1247.90719',
-    #'20161027-2111-lr-svd-1247.38512',
     '20161112-2028-lr-svd-1248.10532',
     '20161030-0044-lr-cd-nr-1248.64251',
+    '20161119-2107-lr-clrbf-1212.10289',
+    '20161120-1710-lr-svd-clrbf-2-1205.77612',
 
     '20161027-2330-et-ce-1217.14724',
     '20161104-1322-et-ce-2-1214.13643',
@@ -732,27 +733,18 @@ l1_predictions = [
     '20161028-0031-gb-ce-1151.11060',
 
     '20161013-1512-xgb1-1146.11469',
-
-    #'20161014-1330-xgb3-1143.31331',
-    #'20161017-0645-xgb3-1137.53294',
-    #'20161018-0434-xgb3-1137.17603',
     '20161027-0203-xgb3-1136.95146',
-
     '20161019-1805-xgb5-1138.26298',
 
-    #'20161016-2155-nn2-1142.81539',
-    #'20161017-0252-nn2-1138.89229',
     '20161018-1033-nn2-1138.11347',
-
-    #'20161017-1350-nn4-1165.61897',
-
-    #'20161019-1157-nn5-1142.70844',
     '20161019-2334-nn5-1142.50482',
 
     '20161105-1053-nn-cd-2-1135.09238',
-
     '20161112-1903-nn-cd-3-1133.89751',
     '20161114-0046-nn-cd-3-1132.74636',
+
+    '20161120-1618-nn-cd-clrbf-1132.30517',
+    '20161122-0610-nn-cd-clrbf-2-1131.97963',
 
     '20161028-1005-nn-svd-1144.31187',
 
@@ -761,30 +753,28 @@ l1_predictions = [
     '20161112-0120-lgb-cd-1-1134.15660',
     '20161112-0551-lgb-cd-2-1132.30663',
 
-    #'20161021-2054-xgb7-1140.67644',
     '20161022-1736-xgb7-1138.66039',
     '20161027-1932-xgb-ce-2-1134.04010',
     '20161028-1420-xgb-ce-3-1132.58408',
 
-    #'20161022-2023-xgbf1-1137.23245',
     '20161023-0643-xgbf1-1133.28725',
-
     '20161025-1849-xgbf3-1133.20314',
 
     '20161028-0039-xgbf-ce-2-1133.25472',
     '20161027-2321-xgbf-ce-3-1130.03141',
     '20161028-1909-xgbf-ce-4-1129.65181',
-
     '20161105-2104-xgbf-ce-5-1138.75039',
     '20161113-1944-xgbf-ce-6-1129.17629',
-
     '20161114-0641-xgbf-ce-7-1127.24376',
-
     '20161115-0812-xgbf-ce-8-1124.35470',
     '20161117-0948-xgbf-ce-8-1124.23084',
 
+    '20161119-2149-xgbf-ce-clrbf-1-1151.82274',
+    '20161120-1506-xgbf-ce-clrbf-2-1140.36323',
+
     '20161026-0127-libfm1-1195.55162',
     '20161028-1032-libfm-svd-1180.69290',
+    '20161122-2028-libfm-svd-1179.83001',
 ]
 
 l2_predictions = [
@@ -1109,6 +1099,30 @@ presets = {
         }, n_iter=2000, fair=1, transform_y=y_log_ofs(200), param_grid={'gamma': [0.9, 1.2], 'alpha': [0.8, 1.2], 'colsample_bytree': [0.15, 0.25]}),
     },
 
+    'xgbf-ce-clrbf-1': {
+        'features': ['numeric', 'categorical_encoded', 'cluster_rbf_200'],
+        #'n_bags': 3,
+        'model': Xgb({
+            'max_depth': 8,
+            'eta': 0.04,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'alpha': 0.9,
+        }, n_iter=1250, fair=150, fair_decay=0.001),
+    },
+
+    'xgbf-ce-clrbf-2': {
+        'features': ['numeric', 'categorical_encoded', 'cluster_rbf_50'],
+        'n_bags': 3,
+        'model': Xgb({
+            'max_depth': 8,
+            'eta': 0.04,
+            'colsample_bytree': 0.4,
+            'subsample': 0.95,
+            'alpha': 0.9,
+            'lambda': 2.1
+        }, n_iter=1100, fair=150),
+    },
 
     'xgbf-tst': {
         'features': ['numeric', 'categorical_encoded'],
@@ -1250,7 +1264,18 @@ presets = {
         'model': LibFM(params={
             'method': 'sgd',
             'learn_rate': 0.00007,
-            'iter': 200,
+            'iter': 260,
+            'dim': '1,1,12',
+            'regular': '0,0,0.0002'
+        }, transform_y=y_log),
+    },
+
+    'libfm-svd-clrbf': {
+        'features': ['svd', 'cluster_rbf_50', 'cluster_rbf_100', 'cluster_rbf_200'],
+        'model': LibFM(params={
+            'method': 'sgd',
+            'learn_rate': 0.00007,
+            'iter': 350,
             'dim': '1,1,12',
             'regular': '0,0,0.0002'
         }, transform_y=y_log),
@@ -1282,6 +1307,24 @@ presets = {
         'features': ['numeric_scaled', 'categorical_dummy'],
         'n_bags': 4,
         'model': Keras(nn_mlp_2, lambda: {'n_epoch': 55, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.25, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False, transform_y=y_log_ofs(200)),
+    },
+
+    'nn-cd-clrbf': {
+        'features': ['numeric_scaled', 'categorical_dummy', 'cluster_rbf_200'],
+        'n_bags': 4,
+        'model': Keras(nn_mlp_2, lambda: {'n_epoch': 55, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.25, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False, transform_y=y_log_ofs(200)),
+    },
+
+    'nn-cd-clrbf-2': {
+        'features': ['numeric_scaled', 'categorical_dummy', 'cluster_rbf_50', 'cluster_rbf_100', 'cluster_rbf_200'],
+        'n_bags': 4,
+        'model': Keras(nn_mlp_2, lambda: {'n_epoch': 70, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.25, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False, transform_y=y_log_ofs(200)),
+    },
+
+    'nn-cd-clrbf-tst': {
+        'features': ['numeric_scaled', 'categorical_dummy', 'cluster_rbf_50', 'cluster_rbf_100', 'cluster_rbf_200'],
+        'n_bags': 4,
+        'model': Keras(nn_mlp_2, lambda: {'n_epoch': 70, 'batch_size': 128, 'layers': [300, 100], 'dropouts': [0.4, 0.25], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False, transform_y=y_log_ofs(200)),
     },
 
     'nn-cd-tst': {
@@ -1323,6 +1366,11 @@ presets = {
     'gb-ce': {
         'features': ['numeric', 'categorical_encoded'],
         'model': Sklearn(GradientBoostingRegressor(loss='lad', n_estimators=300, max_depth=7, max_features=0.2), param_grid={'n_estimators': (200, 400), 'max_depth': (6, 8), 'max_features': (0.1, 0.4)}),
+    },
+
+    'ab-ce': {
+        'features': ['numeric', 'categorical_encoded'],
+        'model': Sklearn(AdaBoostRegressor(loss='linear', n_estimators=300), transform_y=y_log_ofs(200), param_grid={'n_estimators': (50, 400), 'learning_rate': (0.1, 1.0)}),
     },
 
     'et-ce': {
@@ -1398,8 +1446,13 @@ presets = {
         'model': Sklearn(Ridge(1e-3), transform_y=y_log),
     },
 
-    'lr-clrbf': {
-        'features': ['cluster_rbf'],
+    'lr-svd-clrbf': {
+        'features': ['svd', 'cluster_rbf_200'],
+        'model': Sklearn(Ridge(1e-3), transform_y=y_log_ofs(200)),
+    },
+
+    'lr-svd-clrbf-2': {
+        'features': ['svd', 'cluster_rbf_50', 'cluster_rbf_100', 'cluster_rbf_200'],
         'model': Sklearn(Ridge(1e-3), transform_y=y_log_ofs(200)),
     },
 
@@ -1556,15 +1609,14 @@ for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_fol
     for bag in xrange(n_bags):
         print "    Training model %d..." % bag
 
-        # Fit model
-        model = preset['model']
-        model.fit(fold_train_x, fold_train_y, fold_eval_x, fold_eval_y, seed=42 + 13*bag, feature_names=fold_feature_names)
+        pe, pt = preset['model'].fit_predict(train=(fold_train_x, fold_train_y),
+                                             val=(fold_eval_x, fold_eval_y),
+                                             test=(fold_test_x, ),
+                                             seed=42 + 13*bag,
+                                             feature_names=fold_feature_names)
 
-        print "    Predicting eval..."
-        eval_p[:, bag] += model.predict(fold_eval_x)
-
-        print "    Predicting test..."
-        test_p[:, fold * n_bags + bag] += model.predict(fold_test_x)
+        eval_p[:, bag] += pe
+        test_p[:, fold * n_bags + bag] += pt
 
     print "  MAE of mean: %.5f" % mean_absolute_error(fold_eval_y, np.mean(eval_p, axis=1))
     print "  MAE of median: %.5f" % mean_absolute_error(fold_eval_y, np.median(eval_p, axis=1))
