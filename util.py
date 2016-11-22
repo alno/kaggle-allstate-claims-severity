@@ -65,7 +65,9 @@ class Dataset(object):
         'categorical_encoded': 'd2',
         'categorical_dummy': 's2',
         'svd': 'd2',
-        'cluster_rbf': 'd2'
+        'cluster_rbf_50': 'd2',
+        'cluster_rbf_100': 'd2',
+        'cluster_rbf_200': 'd2',
     }
 
     parts = part_types.keys()
