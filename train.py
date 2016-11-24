@@ -24,7 +24,7 @@ from sklearn.svm import LinearSVR
 from sklearn.neighbors import LSHForest
 from sklearn.model_selection import ParameterGrid
 from sklearn.datasets import dump_svmlight_file
-from sklearn.utils import shuffle
+from sklearn.utils import shuffle, resample
 
 from sklearn_util import MedianExtraTreesRegressor
 
@@ -1551,6 +1551,8 @@ feature_builders = preset.get('feature_builders', [])
 n_bags = preset.get('n_bags', 1)
 n_splits = preset.get('n_splits', 1)
 
+sample = preset.get('sample', 1)
+
 y_aggregator = preset.get('agg', np.mean)
 
 print "Loading train data..."
@@ -1642,7 +1644,13 @@ for split in xrange(n_splits):
         for bag in xrange(n_bags):
             print "    Training model %d..." % bag
 
-            pe, pt = preset['model'].fit_predict(train=(fold_train_x, fold_train_y),
+            if sample < 1:
+                bag_train_x, bag_train_y = resample(fold_train_x, fold_train_y, replace=False, n_samples=int(sample * fold_train_x.shape[0]), random_state=42 + 11*split + 13*fold + 17*bag)
+            else:
+                bag_train_x = fold_train_x
+                bag_train_y = fold_train_y
+
+            pe, pt = preset['model'].fit_predict(train=(bag_train_x, bag_train_y),
                                                  val=(fold_eval_x, fold_eval_y),
                                                  test=(fold_test_x, ),
                                                  seed=42 + 11*split + 13*bag,
