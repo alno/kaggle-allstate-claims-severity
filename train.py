@@ -1521,13 +1521,14 @@ preset = presets[args.preset]
 feature_builders = preset.get('feature_builders', [])
 
 n_bags = preset.get('n_bags', 1)
+n_splits = preset.get('n_splits', 1)
 
 y_aggregator = preset.get('agg', np.mean)
 
 print "Loading train data..."
 train_x = load_x('train', preset)
 train_y = Dataset.load_part('train', 'loss')
-train_p = pd.Series(0.0, index=Dataset.load_part('train', 'id'))
+train_p = np.zeros((train_x.shape[0], n_splits * n_bags))
 train_r = Dataset.load('train', parts=np.unique(sum([b.requirements for b in feature_builders], ['loss'])))
 
 feature_names = extract_feature_names(preset)
@@ -1562,84 +1563,85 @@ if args.optimize:
 
 print "Loading test data..."
 test_x = load_x('test', preset)
-test_p = np.zeros((test_x.shape[0], n_bags * n_folds))
+test_p = np.zeros((test_x.shape[0], n_splits * n_bags * n_folds))
 test_r = Dataset.load('test', parts=np.unique([b.requirements for b in feature_builders]))
 
 maes = []
 
-for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_folds, shuffle=True, random_state=2016)):
-    if args.fold is not None and fold != args.fold:
-        continue
-
+for split in xrange(n_splits):
     print
-    print "  Fold %d..." % fold
+    print "Training split %d..." % split
 
-    fold_train_x = train_x[fold_train_idx]
-    fold_train_y = train_y[fold_train_idx]
-    fold_train_r = train_r.slice(fold_train_idx)
+    for fold, (fold_train_idx, fold_eval_idx) in enumerate(KFold(len(train_y), n_folds, shuffle=True, random_state=2016 + 17*split)):
+        if args.fold is not None and fold != args.fold:
+            continue
 
-    fold_eval_x = train_x[fold_eval_idx]
-    fold_eval_y = train_y[fold_eval_idx]
-    fold_eval_r = train_r.slice(fold_eval_idx)
+        print
+        print "  Fold %d..." % fold
 
-    fold_test_x = test_x
-    fold_test_r = test_r
+        fold_train_x = train_x[fold_train_idx]
+        fold_train_y = train_y[fold_train_idx]
+        fold_train_r = train_r.slice(fold_train_idx)
 
-    fold_feature_names = list(feature_names)
+        fold_eval_x = train_x[fold_eval_idx]
+        fold_eval_y = train_y[fold_eval_idx]
+        fold_eval_r = train_r.slice(fold_eval_idx)
 
-    if len(feature_builders) > 0:  # TODO: Move inside of bagging loop
-        print "    Building per-fold features..."
+        fold_test_x = test_x
+        fold_test_r = test_r
 
-        fold_train_x = [fold_train_x]
-        fold_eval_x = [fold_eval_x]
-        fold_test_x = [fold_test_x]
+        fold_feature_names = list(feature_names)
 
-        for fb in feature_builders:
-            fold_train_x.append(fb.fit_transform(fold_train_r))
-            fold_eval_x.append(fb.transform(fold_eval_r))
-            fold_test_x.append(fb.transform(fold_test_r))
-            fold_feature_names += fb.get_feature_names()
+        if len(feature_builders) > 0:  # TODO: Move inside of bagging loop
+            print "    Building per-fold features..."
 
-        fold_train_x = hstack(fold_train_x)
-        fold_eval_x = hstack(fold_eval_x)
-        fold_test_x = hstack(fold_test_x)
+            fold_train_x = [fold_train_x]
+            fold_eval_x = [fold_eval_x]
+            fold_test_x = [fold_test_x]
 
-    eval_p = np.zeros((fold_eval_x.shape[0], n_bags))
+            for fb in feature_builders:
+                fold_train_x.append(fb.fit_transform(fold_train_r))
+                fold_eval_x.append(fb.transform(fold_eval_r))
+                fold_test_x.append(fb.transform(fold_test_r))
+                fold_feature_names += fb.get_feature_names()
 
-    for bag in xrange(n_bags):
-        print "    Training model %d..." % bag
+            fold_train_x = hstack(fold_train_x)
+            fold_eval_x = hstack(fold_eval_x)
+            fold_test_x = hstack(fold_test_x)
 
-        pe, pt = preset['model'].fit_predict(train=(fold_train_x, fold_train_y),
-                                             val=(fold_eval_x, fold_eval_y),
-                                             test=(fold_test_x, ),
-                                             seed=42 + 13*bag,
-                                             feature_names=fold_feature_names)
+        eval_p = np.zeros((fold_eval_x.shape[0], n_bags))
 
-        eval_p[:, bag] += pe
-        test_p[:, fold * n_bags + bag] += pt
+        for bag in xrange(n_bags):
+            print "    Training model %d..." % bag
 
-    print "  MAE of mean: %.5f" % mean_absolute_error(fold_eval_y, np.mean(eval_p, axis=1))
-    print "  MAE of median: %.5f" % mean_absolute_error(fold_eval_y, np.median(eval_p, axis=1))
+            pe, pt = preset['model'].fit_predict(train=(fold_train_x, fold_train_y),
+                                                 val=(fold_eval_x, fold_eval_y),
+                                                 test=(fold_test_x, ),
+                                                 seed=42 + 11*split + 13*bag,
+                                                 feature_names=fold_feature_names)
 
-    # Aggregate eval predictions
-    eval_p = y_aggregator(eval_p, axis=1)
+            eval_p[:, bag] += pe
+            test_p[:, split * n_folds * n_bags + fold * n_bags + bag] = pt
 
-    # Normalize train predictions
-    train_p.iloc[fold_eval_idx] += eval_p
+            train_p[fold_eval_idx, split * n_bags + bag] = pe
 
-    # Calculate err
-    maes.append(mean_absolute_error(fold_eval_y, eval_p))
+        print "  MAE of mean: %.5f" % mean_absolute_error(fold_eval_y, np.mean(eval_p, axis=1))
+        print "  MAE of median: %.5f" % mean_absolute_error(fold_eval_y, np.median(eval_p, axis=1))
 
-    print "  MAE: %.5f" % maes[-1]
+        # Calculate err
+        maes.append(mean_absolute_error(fold_eval_y, y_aggregator(eval_p, axis=1)))
 
-    # Free mem
-    del fold_train_x, fold_train_y, fold_eval_x, fold_eval_y
+        print "  MAE: %.5f" % maes[-1]
+
+        # Free mem
+        del fold_train_x, fold_train_y, fold_eval_x, fold_eval_y
 
 
-## Analyzing predictions
-
+# Aggregate predictions
+train_p = pd.Series(y_aggregator(train_p, axis=1), index=Dataset.load_part('train', 'id'))
 test_p = pd.Series(y_aggregator(test_p, axis=1), index=Dataset.load_part('test', 'id'))
 
+# Analyze predictions
 mae_mean = np.mean(maes)
 mae_std = np.std(maes)
 mae = mean_absolute_error(train_y, train_p)
