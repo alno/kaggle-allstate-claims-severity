@@ -19,10 +19,9 @@ from sklearn.ensemble import ExtraTreesRegressor, RandomForestRegressor, Gradien
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import Ridge, ElasticNet
-from sklearn.svm import LinearSVR
+from sklearn.linear_model import Ridge
+from sklearn.svm import SVR
 from sklearn.neighbors import LSHForest
-from sklearn.model_selection import ParameterGrid
 from sklearn.datasets import dump_svmlight_file
 from sklearn.utils import shuffle, resample
 
@@ -745,6 +744,9 @@ l1_predictions = [
 
     '20161028-0031-gb-ce-1151.11060',
 
+    '20161124-1845-knn1-1370.65015',
+    '20161124-2138-svr1-1253.37526',
+
     '20161013-1512-xgb1-1146.11469',
     '20161027-0203-xgb3-1136.95146',
     '20161019-1805-xgb5-1138.26298',
@@ -792,7 +794,7 @@ l1_predictions = [
 
 l2_predictions = [
     '20161112-2136-l2-lr-1124.72277',
-    '20161124-1759-l2-gb-1120.05581',
+    '20161124-2345-l2-gb-1118.94278',
     '20161123-1906-l2-xgbf-1119.41877',
     '20161115-1523-l2-nn-1118.50030',
     '20161124-1430-l2-nn-2-1117.28245',
@@ -1468,8 +1470,15 @@ presets = {
     },
 
     'knn1': {
-        'features': ['svd'],
-        'model': Sklearn(Pipeline([('sc', StandardScaler(with_mean=False)), ('knn', KNeighborsRegressor(5))]), transform_y=y_log),
+        'features': ['numeric', 'categorical_encoded'],
+        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('est', KNeighborsRegressor(5, n_jobs=-1))]), transform_y=y_log_ofs(200)),
+    },
+
+    'svr1': {
+        'features': ['numeric', 'categorical_encoded'],
+        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('est', SVR())]), transform_y=y_log_ofs(200)),
+        'sample': 0.02,
+        'n_bags': 8,
     },
 
     'lsh1': {
