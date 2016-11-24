@@ -38,6 +38,8 @@ from keras import backend as K
 from keras import regularizers
 from keras_util import ExponentialMovingAverage, batch_generator
 
+from statsmodels.regression.quantile_regression import QuantReg
+
 from pylightgbm.models import GBMRegressor
 
 from scipy.stats import boxcox
@@ -480,6 +482,17 @@ class Sklearn(BaseAlgo):
         print "Best mae: %.5f, params: %s" % (opt.res['max']['max_val'], opt.res['mas']['max_params'])
 
 
+class QuantileRegression(object):
+
+    def fit_predict(self, train, val=None, test=None, **kwa):
+        model = QuantReg(train[1], train[0]).fit(q=0.5)
+
+        val_pred = model.predict(val[0])
+        test_pred = model.predict(test[0])
+
+        return val_pred, test_pred
+
+
 class LshForest(BaseAlgo):
 
     def __init__(self, transform_y=None):
@@ -768,23 +781,21 @@ l1_predictions = [
     '20161114-0641-xgbf-ce-7-1127.24376',
     '20161115-0812-xgbf-ce-8-1124.35470',
     '20161117-0948-xgbf-ce-8-1124.23084',
+    '20161124-0838-xgbf-ce-9-1123.51791',
 
     '20161119-2149-xgbf-ce-clrbf-1-1151.82274',
     '20161120-1506-xgbf-ce-clrbf-2-1140.36323',
 
     '20161026-0127-libfm1-1195.55162',
-    '20161028-1032-libfm-svd-1180.69290',
     '20161122-2028-libfm-svd-1179.83001',
 ]
 
 l2_predictions = [
     '20161112-2136-l2-lr-1124.72277',
-    #'20161113-0020-l2-et-1124.59154',
-    #'20161112-1624-l2-nn-1120.42637',
-    '20161113-0206-l2-nn-1119.67630',
+    '20161124-1759-l2-gb-1120.05581',
+    '20161123-1906-l2-xgbf-1119.41877',
     '20161115-1523-l2-nn-1118.50030',
-    '20161112-2302-l2-xgbf-1121.74439',
-    '20161115-0356-l2-xgbf-1120.47804',
+    '20161124-1430-l2-nn-2-1117.28245',
 ]
 
 presets = {
@@ -1478,10 +1489,16 @@ presets = {
         'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'layers': [200, 50], 'dropouts': [0.15, 0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3)]}),
     },
 
+    'l2-nn-3': {
+        'predictions': l1_predictions,
+        'n_bags': 4,
+        'model': Keras(nn_mlp, lambda: {'l1': 3e-6, 'l2': 3e-6, 'n_epoch': 70, 'batch_size': 128, 'layers': [200, 100], 'dropouts': [0.15, 0.15], 'optimizer': SGD(1e-4, momentum=0.9, nesterov=True, decay=3e-5), 'callbacks': [ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3)]}),
+    },
+
     'l2-lr': {
         'predictions': l1_predictions,
-        'prediction_transform': np.log,
-        'model': Sklearn(Ridge(), transform_y=y_log),
+        'prediction_transform': lambda x: np.log(x+200),
+        'model': Sklearn(Ridge(), transform_y=y_log_ofs(200)),
     },
 
     'l2-xgbf': {
@@ -1489,11 +1506,11 @@ presets = {
         'n_bags': 4,
         'model': Xgb({
             'max_depth': 4,
-            'eta': 0.01,
-            'colsample_bytree': 0.3,
+            'eta': 0.005,
+            'colsample_bytree': 0.4,
             'subsample': 0.75,
             'min_child_weight': 6,
-        }, n_iter=2200, fair=1.0, transform_y=y_log_ofs(200)),
+        }, n_iter=2500, fair=1.0, transform_y=y_log_ofs(200)),
     },
 
     'l2-et': {
@@ -1506,10 +1523,21 @@ presets = {
         'model': Sklearn(RandomForestRegressor(100, max_depth=9, max_features=0.8, min_samples_leaf=23, n_jobs=-1), transform_y=y_log_ofs(200), param_grid={'min_samples_leaf': (1, 40), 'max_features': (0.05, 0.8), 'max_depth': (3, 20)}),
     },
 
+    'l2-gb': {
+        'predictions': l1_predictions,
+        'model': Sklearn(GradientBoostingRegressor(loss='lad', n_estimators=425, learning_rate=0.05, subsample=0.65, min_samples_leaf=9, max_depth=5, max_features=0.35), param_grid={'n_estimators': (200, 500), 'max_depth': (1, 8), 'max_features': (0.1, 0.8), 'min_samples_leaf': (1, 20), 'subsample': (0.5, 1.0), 'learning_rate': (0.01, 0.3)}),
+    },
+
     'l3-nn': {
         'predictions': l2_predictions,
         'n_bags': 4,
         'model': Keras(nn_lr, lambda: {'l2': 1e-5, 'n_epoch': 1, 'batch_size': 128, 'optimizer': SGD(lr=2.0, momentum=0.8, nesterov=True, decay=1e-4)}),
+        'agg': np.mean,
+    },
+
+    'l3-qr': {
+        'predictions': l2_predictions,
+        'model': QuantileRegression(),
         'agg': np.mean,
     },
 }
