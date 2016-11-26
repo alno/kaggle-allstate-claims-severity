@@ -32,7 +32,7 @@ from keras.layers import Dense, MaxoutDense, Dropout, Lambda
 from keras.layers.advanced_activations import PReLU
 from keras.layers.normalization import BatchNormalization
 from keras.optimizers import SGD, Adam, Nadam, Adadelta
-from keras.callbacks import ReduceLROnPlateau, LearningRateScheduler
+from keras.callbacks import ReduceLROnPlateau, LearningRateScheduler, ModelCheckpoint
 from keras import backend as K
 from keras import regularizers
 from keras_util import ExponentialMovingAverage, batch_generator
@@ -523,12 +523,13 @@ class LshForest(BaseAlgo):
 
 class Keras(BaseAlgo):
 
-    def __init__(self, arch, params, transform_y=None, scale=True, loss='mae'):
+    def __init__(self, arch, params, transform_y=None, scale=True, loss='mae', checkpoint=False):
         self.arch = arch
         self.params = params
         self.transform_y = transform_y
         self.scale = scale
         self.loss = loss
+        self.checkpoint = checkpoint
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None):
         params = self.params
@@ -550,13 +551,23 @@ class Keras(BaseAlgo):
             X_train = self.scaler.fit_transform(X_train)
             X_eval = self.scaler.transform(X_eval)
 
+        checkpoint_path = "/tmp/nn-weights-%d.h5" % seed
+
         self.model = self.arch((X_train.shape[1],), params)
         self.model.compile(optimizer=params.get('optimizer', 'adadelta'), loss=self.loss)
+
+        callbacks = list(params.get('callbacks', []))
+
+        if self.checkpoint:
+            callbacks.append(ModelCheckpoint(checkpoint_path, monitor='val_loss', save_best_only=True, verbose=0))
 
         self.model.fit_generator(
             generator=batch_generator(X_train, y_train, params['batch_size'], True), samples_per_epoch=X_train.shape[0],
             validation_data=batch_generator(X_eval, y_eval, 800), nb_val_samples=X_eval.shape[0],
-            nb_epoch=params['n_epoch'], verbose=1, callbacks=params.get('callbacks', []))
+            nb_epoch=params['n_epoch'], verbose=1, callbacks=callbacks)
+
+        if self.checkpoint and os.path.isfile(checkpoint_path):
+            self.model.load_weights(checkpoint_path)
 
     def predict(self, X):
         if self.scale:
@@ -1662,7 +1673,7 @@ for split in xrange(n_splits):
             pe, pt = preset['model'].fit_predict(train=(bag_train_x, bag_train_y),
                                                  val=(fold_eval_x, fold_eval_y),
                                                  test=(fold_test_x, ),
-                                                 seed=42 + 11*split + 13*bag,
+                                                 seed=42 + 11*split + 17*fold + 13*bag,
                                                  feature_names=fold_feature_names)
 
             eval_p[:, bag] += pe
