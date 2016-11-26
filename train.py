@@ -185,7 +185,7 @@ class Xgb(BaseAlgo):
         'nthread': -1,
     }
 
-    def __init__(self, params, n_iter=400, transform_y=None, param_grid=None, huber=None, fair=None, fair_decay=0):
+    def __init__(self, params, n_iter=400, transform_y=None, huber=None, fair=None, fair_decay=0):
         self.params = self.default_params.copy()
 
         for k in params:
@@ -193,7 +193,6 @@ class Xgb(BaseAlgo):
 
         self.n_iter = n_iter
         self.transform_y = transform_y
-        self.param_grid = param_grid
         self.huber = huber
         self.fair = fair
         self.fair_decay = fair_decay
@@ -239,7 +238,7 @@ class Xgb(BaseAlgo):
 
         return pred
 
-    def optimize(self, X_train, y_train, X_eval, y_eval, seed=42):
+    def optimize(self, X_train, y_train, X_eval, y_eval, param_grid, seed=42):
         if self.transform_y is not None:
             y_tr, y_inv = self.transform_y
 
@@ -259,7 +258,7 @@ class Xgb(BaseAlgo):
             params['base_score'] = np.median(y_train)
 
             for k in kw:
-                if type(self.param_grid[k][0]) is int:
+                if type(param_grid[k][0]) is int:
                     params[k] = int(kw[k])
                 else:
                     params[k] = kw[k]
@@ -274,7 +273,7 @@ class Xgb(BaseAlgo):
 
             return - model.best_score
 
-        opt = BayesianOptimization(fun, self.param_grid)
+        opt = BayesianOptimization(fun, param_grid)
         opt.maximize(n_iter=100)
 
         print "Best mae: %.5f, params: %s" % (opt.res['max']['max_val'], opt.res['mas']['max_params'])
@@ -436,10 +435,9 @@ class LibFM(BaseAlgo):
 
 class Sklearn(BaseAlgo):
 
-    def __init__(self, model, transform_y=None, param_grid=None):
+    def __init__(self, model, transform_y=None):
         self.model = model
         self.transform_y = transform_y
-        self.param_grid = param_grid
 
     def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None):
         if self.transform_y is not None:
@@ -457,10 +455,10 @@ class Sklearn(BaseAlgo):
 
         return pred
 
-    def optimize(self, X_train, y_train, X_eval, y_eval):
+    def optimize(self, X_train, y_train, X_eval, y_eval, param_grid):
         def fun(**params):
             for k in params:
-                if type(self.param_grid[k][0]) is int:
+                if type(param_grid[k][0]) is int:
                     params[k] = int(params[k])
 
             print "Trying %s..." % str(params)
@@ -475,7 +473,7 @@ class Sklearn(BaseAlgo):
 
             return -mae
 
-        opt = BayesianOptimization(fun, self.param_grid)
+        opt = BayesianOptimization(fun, param_grid)
         opt.maximize(n_iter=100)
 
         print "Best mae: %.5f, params: %s" % (opt.res['max']['max_val'], opt.res['mas']['max_params'])
@@ -817,7 +815,8 @@ l2_predictions = [
 presets = {
     'xgb-tst': {
         'features': ['numeric'],
-        'model': Xgb({'max_depth': 5, 'eta': 0.05}, n_iter=10, param_grid={'colsample_bytree': [0.2, 1.0]}),
+        'model': Xgb({'max_depth': 5, 'eta': 0.05}, n_iter=10),
+        'param_grid': {'colsample_bytree': [0.2, 1.0]},
     },
 
     'xgb2': {
@@ -828,7 +827,8 @@ presets = {
             'colsample_bytree': 0.5,
             'subsample': 0.95,
             'min_child_weight': 5,
-        }, n_iter=400, transform_y=y_norm, param_grid={'colsample_bytree': [0.2, 1.0]}),
+        }, n_iter=400, transform_y=y_norm),
+        'param_grid': {'colsample_bytree': [0.2, 1.0]},
     },
 
     'xgb-ce': {
@@ -902,7 +902,8 @@ presets = {
             'colsample_bytree': 0.4,
             'subsample': 0.95,
             'min_child_weight': 4,
-        }, n_iter=2000, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=2000, transform_y=y_norm),
+        'param_grid': {'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]},
     },
 
     'xgb7': {
@@ -914,7 +915,8 @@ presets = {
             'colsample_bytree': 0.4,
             'subsample': 0.95,
             'min_child_weight': 4,
-        }, n_iter=2000, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=2000, transform_y=y_norm),
+        'param_grid': {'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]},
     },
 
     'xgbh-ce': {
@@ -926,7 +928,8 @@ presets = {
             'colsample_bytree': 0.4,
             'subsample': 0.95,
             'min_child_weight': 4,
-        }, n_iter=2000, huber=100, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=2000, huber=100),
+        'param_grid': {'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]},
     },
 
     'xgbf-ce': {
@@ -939,7 +942,8 @@ presets = {
             'subsample': 0.95,
             'min_child_weight': 4,
             'alpha': 0.0005,
-        }, n_iter=1100, fair=1, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=1100, fair=1, transform_y=y_norm),
+        'param_grid': {'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]},
     },
 
     'xgbf-ce-2': {
@@ -952,7 +956,8 @@ presets = {
             'subsample': 0.95,
             'gamma': 0.45,
             'alpha': 0.0005,
-        }, n_iter=1320, fair=1, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=1320, fair=1, transform_y=y_norm),
+        'param_grid': {'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]},
     },
 
     'xgbf-ce-3': {
@@ -965,7 +970,8 @@ presets = {
             'subsample': 0.95,
             'gamma': 0.5,
             'alpha': 0.5,
-        }, n_iter=2000, fair=1, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=2000, fair=1, transform_y=y_norm),
+        'param_grid': {'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]},
     },
 
     'xgbf-ce-4': {
@@ -978,7 +984,8 @@ presets = {
             'subsample': 0.95,
             'gamma': 0.6,
             'alpha': 0.5,
-        }, n_iter=2700, fair=1, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=2700, fair=1, transform_y=y_norm),
+        'param_grid': {'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]},
     },
 
     'xgbf-ce-4-2': {
@@ -991,7 +998,8 @@ presets = {
             'subsample': 0.95,
             'gamma': 1.5,
             'alpha': 1.0,
-        }, n_iter=2700, fair=1, transform_y=y_log, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=2700, fair=1, transform_y=y_log),
+        'param_grid': {'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]},
     },
 
     'xgbf-ce-5': {
@@ -1020,7 +1028,7 @@ presets = {
             'subsample': 0.95,
             'gamma': 0.6,
             'alpha': 0.5,
-        }, n_iter=2700, fair=1, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=2700, fair=1, transform_y=y_norm),
     },
 
     'xgbf-ce-7': {
@@ -1037,7 +1045,7 @@ presets = {
             'subsample': 0.95,
             'gamma': 1.2,
             'alpha': 1.0,
-        }, n_iter=2500, fair=1, transform_y=y_log_ofs(200), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=2500, fair=1, transform_y=y_log_ofs(200)),
     },
 
     'xgbf-ce-8': {
@@ -1054,7 +1062,7 @@ presets = {
             'subsample': 0.95,
             'gamma': 1.15,
             'alpha': 1.0,
-        }, n_iter=16000, fair=1, transform_y=y_log_ofs(200), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=16000, fair=1, transform_y=y_log_ofs(200)),
     },
 
     'xgbf-ce-9': {
@@ -1071,7 +1079,7 @@ presets = {
             'subsample': 0.95,
             'gamma': 1.1,
             'alpha': 0.95,
-        }, n_iter=8000, fair=1, transform_y=y_log_ofs(200), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=8000, fair=1, transform_y=y_log_ofs(200)),
     },
 
     'xgbf-ce-tst': {
@@ -1088,7 +1096,7 @@ presets = {
             'subsample': 0.95,
             'gamma': 1.15,
             'alpha': 1.0,
-        }, n_iter=8000, fair=1, transform_y=y_log_ofs(200), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=8000, fair=1, transform_y=y_log_ofs(200)),
     },
 
     'xgbf-ce-tst-2': {
@@ -1105,7 +1113,7 @@ presets = {
             'subsample': 0.95,
             'gamma': 1.15,
             'alpha': 1.0,
-        }, n_iter=2000, fair=1, transform_y=y_log_ofs(200), param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=2000, fair=1, transform_y=y_log_ofs(200)),
     },
 
 
@@ -1123,7 +1131,8 @@ presets = {
             'subsample': 0.95,
             'gamma': 1.15,
             'alpha': 1.0,
-        }, n_iter=2000, fair=1, transform_y=y_log_ofs(200), param_grid={'gamma': [0.9, 1.2], 'alpha': [0.8, 1.2], 'colsample_bytree': [0.15, 0.25]}),
+        }, n_iter=2000, fair=1, transform_y=y_log_ofs(200)),
+        'param_grid': {'gamma': [0.9, 1.2], 'alpha': [0.8, 1.2], 'colsample_bytree': [0.15, 0.25]},
     },
 
     'xgbf-ce-clrbf-1': {
@@ -1162,7 +1171,7 @@ presets = {
             'gamma': 0.45,
             'alpha': 0.0005,
             #'lambda': 1.0,
-        }, n_iter=1100, fair=1, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=1100, fair=1, transform_y=y_norm),
     },
 
     'xgbf-cm-tst': {
@@ -1180,7 +1189,7 @@ presets = {
             'subsample': 0.95,
             'min_child_weight': 4,
             'alpha': 0.0005,
-        }, n_iter=500, fair=1, transform_y=y_norm, param_grid={'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]}),
+        }, n_iter=500, fair=1, transform_y=y_norm),
     },
 
     'lgb-ce': {
@@ -1398,12 +1407,14 @@ presets = {
 
     'gb-ce': {
         'features': ['numeric', 'categorical_encoded'],
-        'model': Sklearn(GradientBoostingRegressor(loss='lad', n_estimators=300, max_depth=7, max_features=0.2), param_grid={'n_estimators': (200, 400), 'max_depth': (6, 8), 'max_features': (0.1, 0.4)}),
+        'model': Sklearn(GradientBoostingRegressor(loss='lad', n_estimators=300, max_depth=7, max_features=0.2)),
+        'param_grid': {'n_estimators': (200, 400), 'max_depth': (6, 8), 'max_features': (0.1, 0.4)},
     },
 
     'ab-ce': {
         'features': ['numeric', 'categorical_encoded'],
-        'model': Sklearn(AdaBoostRegressor(loss='linear', n_estimators=300), transform_y=y_log_ofs(200), param_grid={'n_estimators': (50, 400), 'learning_rate': (0.1, 1.0)}),
+        'model': Sklearn(AdaBoostRegressor(loss='linear', n_estimators=300), transform_y=y_log_ofs(200)),
+        'param_grid': {'n_estimators': (50, 400), 'learning_rate': (0.1, 1.0)},
     },
 
     'et-ce': {
@@ -1427,7 +1438,8 @@ presets = {
             CategoricalAlphaEncoded(
                 combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13')]
             )],
-        'model': Sklearn(ExtraTreesRegressor(400, max_features=0.623,  max_depth=29, min_samples_leaf=4, n_jobs=-1), transform_y=y_log_ofs(200), param_grid={'min_samples_leaf': (2, 40), 'max_features': (0.05, 0.95), 'max_depth': (5, 40)}),
+        'model': Sklearn(ExtraTreesRegressor(400, max_features=0.623,  max_depth=29, min_samples_leaf=4, n_jobs=-1), transform_y=y_log_ofs(200)),
+        'param_grid': {'min_samples_leaf': (2, 40), 'max_features': (0.05, 0.95), 'max_depth': (5, 40)},
     },
 
     'rf-ce': {
@@ -1446,12 +1458,14 @@ presets = {
             CategoricalAlphaEncoded(
                 combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13')]
             )],
-        'model': Sklearn(RandomForestRegressor(400, max_features=0.62, max_depth=39, min_samples_leaf=5, n_jobs=-1), transform_y=y_log_ofs(200), param_grid={'min_samples_leaf': (2, 40), 'max_features': (0.05, 0.95), 'max_depth': (5, 40)}),
+        'model': Sklearn(RandomForestRegressor(400, max_features=0.62, max_depth=39, min_samples_leaf=5, n_jobs=-1), transform_y=y_log_ofs(200)),
+        'param_grid': {'min_samples_leaf': (2, 40), 'max_features': (0.05, 0.95), 'max_depth': (5, 40)},
     },
 
     'lr-cd': {
         'features': ['numeric_scaled', 'categorical_dummy'],
-        'model': Sklearn(Ridge(1e-3), transform_y=y_log, param_grid={'C': (1e-3, 1e3)}),
+        'model': Sklearn(Ridge(1e-3), transform_y=y_log),
+        'param_grid': {'C': (1e-3, 1e3)},
     },
 
     'lr-cm': {
@@ -1461,12 +1475,12 @@ presets = {
                 C=10000, noisy=True, noise_std=0.01, loo=True,
                 combinations=itertools.combinations('cat80,cat87,cat57,cat12,cat79,cat10,cat7,cat89,cat2,cat72,cat81,cat11,cat1,cat13,cat9,cat3,cat16,cat90,cat23,cat36,cat73,cat103,cat40,cat28,cat111,cat6,cat76,cat50,cat5,cat4,cat14,cat38,cat24,cat82,cat25'.split(','), 2)
             )],
-        'model': Sklearn(Ridge(1e-3), transform_y=y_log, param_grid={'C': (1e-3, 1e3)}),
+        'model': Sklearn(Ridge(1e-3), transform_y=y_log),
     },
 
     'lr-cd-nr': {
         'features': ['numeric_rank_norm', 'categorical_dummy'],
-        'model': Sklearn(Ridge(1e-3), transform_y=y_log, param_grid={'C': (1e-3, 1e3)}),
+        'model': Sklearn(Ridge(1e-3), transform_y=y_log),
     },
 
     'lr-ce': {
@@ -1551,17 +1565,20 @@ presets = {
 
     'l2-et': {
         'predictions': l1_predictions,
-        'model': Sklearn(ExtraTreesRegressor(100, max_depth=11, max_features=0.8, n_jobs=-1), transform_y=y_log_ofs(200), param_grid={'min_samples_leaf': (1, 40), 'max_features': (0.05, 0.8), 'max_depth': (3, 20)}),
+        'model': Sklearn(ExtraTreesRegressor(100, max_depth=11, max_features=0.8, n_jobs=-1), transform_y=y_log_ofs(200)),
+        'param_grid': {'min_samples_leaf': (1, 40), 'max_features': (0.05, 0.8), 'max_depth': (3, 20)},
     },
 
     'l2-rf': {
         'predictions': l1_predictions,
-        'model': Sklearn(RandomForestRegressor(100, max_depth=9, max_features=0.8, min_samples_leaf=23, n_jobs=-1), transform_y=y_log_ofs(200), param_grid={'min_samples_leaf': (1, 40), 'max_features': (0.05, 0.8), 'max_depth': (3, 20)}),
+        'model': Sklearn(RandomForestRegressor(100, max_depth=9, max_features=0.8, min_samples_leaf=23, n_jobs=-1), transform_y=y_log_ofs(200)),
+        'param_grid': {'min_samples_leaf': (1, 40), 'max_features': (0.05, 0.8), 'max_depth': (3, 20)},
     },
 
     'l2-gb': {
         'predictions': l1_predictions,
-        'model': Sklearn(GradientBoostingRegressor(loss='lad', n_estimators=425, learning_rate=0.05, subsample=0.65, min_samples_leaf=9, max_depth=5, max_features=0.35), param_grid={'n_estimators': (200, 500), 'max_depth': (1, 8), 'max_features': (0.1, 0.8), 'min_samples_leaf': (1, 20), 'subsample': (0.5, 1.0), 'learning_rate': (0.01, 0.3)}),
+        'model': Sklearn(GradientBoostingRegressor(loss='lad', n_estimators=425, learning_rate=0.05, subsample=0.65, min_samples_leaf=9, max_depth=5, max_features=0.35)),
+        'param_grid': {'n_estimators': (200, 500), 'max_depth': (1, 8), 'max_features': (0.1, 0.8), 'min_samples_leaf': (1, 20), 'subsample': (0.5, 1.0), 'learning_rate': (0.01, 0.3)},
     },
 
     'l3-nn': {
@@ -1624,7 +1641,7 @@ if args.optimize:
         opt_train_x = hstack(opt_train_x)
         opt_eval_x = hstack(opt_eval_x)
 
-    preset['model'].optimize(opt_train_x, opt_train_y, opt_eval_x, opt_eval_y)
+    preset['model'].optimize(opt_train_x, opt_train_y, opt_eval_x, opt_eval_y, preset['param_grid'])
 
 
 print "Loading test data..."
