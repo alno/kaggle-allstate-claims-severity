@@ -911,7 +911,7 @@ presets = {
 
     'xgbf-ce-5': {
         'features': ['numeric', 'categorical_encoded'],
-        #'n_bags': 3,
+        'n_bags': 3,
         'model': Xgb({
             'max_depth': 9,
             'eta': 0.04,
@@ -1662,18 +1662,19 @@ for split in xrange(n_splits):
                                                  feature_names=fold_feature_names,
                                                  eval_func=lambda yt, yp: mean_absolute_error(y_inv_transform(yt), y_inv_transform(yp)))
 
-            eval_p[:, bag] += y_inv_transform(pe)
-            test_p[:, split * n_folds * n_bags + fold * n_bags + bag] = y_inv_transform(pt)
+            eval_p[:, bag] += pe
+            test_p[:, split * n_folds * n_bags + fold * n_bags + bag] = pt
 
             train_p[fold_eval_idx, split * n_bags + bag] = pe
 
-            print "    MAE of model: %.5f" % mean_absolute_error(fold_eval_y, pe)
+            print "    MAE of model: %.5f" % mean_absolute_error(fold_eval_y, y_inv_transform(pe))
 
-        print "  MAE of mean: %.5f" % mean_absolute_error(fold_eval_y, np.mean(eval_p, axis=1))
-        print "  MAE of median: %.5f" % mean_absolute_error(fold_eval_y, np.median(eval_p, axis=1))
+        print "  MAE of mean-transform: %.5f" % mean_absolute_error(fold_eval_y, y_inv_transform(np.mean(eval_p, axis=1)))
+        print "  MAE of transform-mean: %.5f" % mean_absolute_error(fold_eval_y, np.mean(y_inv_transform(eval_p), axis=1))
+        print "  MAE of transform-median: %.5f" % mean_absolute_error(fold_eval_y, np.median(y_inv_transform(eval_p), axis=1))
 
         # Calculate err
-        maes.append(mean_absolute_error(fold_eval_y, y_aggregator(eval_p, axis=1)))
+        maes.append(mean_absolute_error(fold_eval_y, y_aggregator(y_inv_transform(eval_p), axis=1)))
 
         print "  MAE: %.5f" % maes[-1]
 
@@ -1682,8 +1683,8 @@ for split in xrange(n_splits):
 
 
 # Aggregate predictions
-train_p = pd.Series(y_aggregator(train_p, axis=1), index=Dataset.load_part('train', 'id'))
-test_p = pd.Series(y_aggregator(test_p, axis=1), index=Dataset.load_part('test', 'id'))
+train_p = pd.Series(y_aggregator(y_inv_transform(train_p), axis=1), index=Dataset.load_part('train', 'id'))
+test_p = pd.Series(y_aggregator(y_inv_transform(test_p), axis=1), index=Dataset.load_part('test', 'id'))
 
 # Analyze predictions
 mae_mean = np.mean(maes)
