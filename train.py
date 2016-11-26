@@ -756,7 +756,9 @@ l1_predictions = [
     '20161028-0031-gb-ce-1151.11060',
 
     '20161124-1845-knn1-1370.65015',
-    '20161124-2138-svr1-1253.37526',
+    '20161125-0522-knn2-1364.78537',
+
+    '20161125-0207-svr1-1224.28418',
 
     '20161013-1512-xgb1-1146.11469',
     '20161027-0203-xgb3-1136.95146',
@@ -805,10 +807,11 @@ l1_predictions = [
 
 l2_predictions = [
     '20161112-2136-l2-lr-1124.72277',
-    '20161124-2345-l2-gb-1118.94278',
-    '20161123-1906-l2-xgbf-1119.41877',
+    '20161125-0218-l2-gb-1118.82774',
+    '20161125-0753-l2-xgbf-1119.04996',
     '20161115-1523-l2-nn-1118.50030',
     '20161124-1430-l2-nn-2-1117.28245',
+    '20161125-0958-l2-nn-2-1117.29028',
 ]
 
 presets = {
@@ -1345,10 +1348,16 @@ presets = {
         'model': Keras(nn_mlp_2, lambda: {'n_epoch': 70, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.25, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False, transform_y=y_log_ofs(200)),
     },
 
+    'nn-cd-clrbf-3': {
+        'features': ['numeric_scaled', 'categorical_dummy', 'cluster_rbf_50', 'cluster_rbf_100', 'cluster_rbf_200'],
+        'n_bags': 4,
+        'model': Keras(nn_mlp_2, lambda: {'l1': 1e-6, 'n_epoch': 70, 'batch_size': 128, 'layers': [400, 200, 80], 'dropouts': [0.4, 0.3, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False, transform_y=y_log_ofs(200)),
+    },
+
     'nn-cd-clrbf-tst': {
         'features': ['numeric_scaled', 'categorical_dummy', 'cluster_rbf_50', 'cluster_rbf_100', 'cluster_rbf_200'],
         'n_bags': 4,
-        'model': Keras(nn_mlp_2, lambda: {'n_epoch': 70, 'batch_size': 128, 'layers': [300, 100], 'dropouts': [0.4, 0.25], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False, transform_y=y_log_ofs(200)),
+        'model': Keras(nn_mlp_2, lambda: {'l1': 1e-6, 'n_epoch': 70, 'batch_size': 128, 'layers': [400, 200, 100], 'dropouts': [0.4, 0.3, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False, transform_y=y_log_ofs(200)),
     },
 
     'nn-cd-tst': {
@@ -1485,10 +1494,17 @@ presets = {
         'model': Sklearn(Pipeline([('sc', StandardScaler()), ('est', KNeighborsRegressor(5, n_jobs=-1))]), transform_y=y_log_ofs(200)),
     },
 
+    'knn2': {
+        'features': ['numeric', 'categorical_encoded'],
+        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('est', KNeighborsRegressor(20, n_jobs=-1))]), transform_y=y_log_ofs(200)),
+        'sample': 0.2,
+        'n_bags': 4,
+    },
+
     'svr1': {
         'features': ['numeric', 'categorical_encoded'],
         'model': Sklearn(Pipeline([('sc', StandardScaler()), ('est', SVR())]), transform_y=y_log_ofs(200)),
-        'sample': 0.02,
+        'sample': 0.05,
         'n_bags': 8,
     },
 
@@ -1680,6 +1696,8 @@ for split in xrange(n_splits):
             test_p[:, split * n_folds * n_bags + fold * n_bags + bag] = pt
 
             train_p[fold_eval_idx, split * n_bags + bag] = pe
+
+            print "    MAE of model: %.5f" % mean_absolute_error(fold_eval_y, pe)
 
         print "  MAE of mean: %.5f" % mean_absolute_error(fold_eval_y, np.mean(eval_p, axis=1))
         print "  MAE of median: %.5f" % mean_absolute_error(fold_eval_y, np.median(eval_p, axis=1))
