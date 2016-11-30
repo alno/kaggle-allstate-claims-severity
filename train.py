@@ -21,7 +21,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Ridge
 from sklearn.svm import SVR
-from sklearn.neighbors import LSHForest
+from sklearn.decomposition import TruncatedSVD
 from sklearn.datasets import dump_svmlight_file
 from sklearn.utils import shuffle, resample
 
@@ -704,16 +704,22 @@ l1_predictions = [
 ]
 
 l2_predictions = [
+    '20161129-2258-l2-knn-1129.02808',
+    '20161130-0109-l2-svd-knn-1128.68593',
+    '20161130-0230-l2-svd-svr-1128.15513',
     '20161127-0039-l2-lr-1120.96872',
     '20161125-0218-l2-gb-1118.82774',
     '20161125-0753-l2-xgbf-1119.04996',
+    '20161130-0258-l2-xgbf-1118.96658',
     #'20161127-1938-l2-xgbf-2-1118.95698',
     '20161129-1816-l2-xgbf-2-1118.83511',
+    '20161130-0725-l2-xgbf-2-1118.78277',
     '20161115-1523-l2-nn-1118.50030',
     '20161129-1219-l2-nn-1117.84214',
     '20161124-1430-l2-nn-2-1117.28245',
     '20161125-0958-l2-nn-2-1117.29028',
     '20161129-1021-l2-nn-2-1117.39540',
+    '20161129-2228-l2-nn-2-1117.01003',
 ]
 
 presets = {
@@ -1551,6 +1557,23 @@ presets = {
         'param_grid': {'max_depth': (3, 7), 'min_child_weight': (1, 20), 'lambda': (0, 2.0), 'alpha': (0, 2.0), 'subsample': (0.5, 1.0)},
     },
 
+    'l2-xgbf-3': {
+        'features': ['manual'],
+        'predictions': l1_predictions,
+        'y_transform': y_log_ofs(200),
+        'n_bags': 4,
+        'model': Xgb({
+            'max_depth': 3,
+            'eta': 0.005,
+            'colsample_bytree': 0.4,
+            'subsample': 0.55,
+            'min_child_weight': 3,
+            'lambda': 0.5,
+            'alpha': 0.4,
+        }, n_iter=10000, fair=1.0),
+        'param_grid': {'max_depth': (3, 7), 'min_child_weight': (1, 20), 'lambda': (0, 2.0), 'alpha': (0, 2.0), 'subsample': (0.5, 1.0)},
+    },
+
     'l2-et': {
         'predictions': l1_predictions,
         'y_transform': y_log_ofs(200),
@@ -1571,11 +1594,30 @@ presets = {
         'param_grid': {'n_estimators': (200, 500), 'max_depth': (1, 8), 'max_features': (0.1, 0.8), 'min_samples_leaf': (1, 20), 'subsample': (0.5, 1.0), 'learning_rate': (0.01, 0.3)},
     },
 
-    'l2-svr': {
+    'l2-svd-svr': {
         'predictions': l1_predictions,
+        'prediction_transform': lambda x: np.log(x+200),
         'y_transform': y_log_ofs(200),
-        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('est', SVR())])),
-        'sample': 0.05,
+        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('svd', TruncatedSVD(10)), ('est', SVR())])),
+        'sample': 0.1,
+        'n_bags': 4,
+    },
+
+    'l2-knn': {
+        'predictions': l1_predictions,
+        'prediction_transform': lambda x: np.log(x+200),
+        'y_transform': y_log_ofs(200),
+        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('est', KNeighborsRegressor(100, 'distance', n_jobs=-1))])),
+        'sample': 0.2,
+        'n_bags': 4,
+    },
+
+    'l2-svd-knn': {
+        'predictions': l1_predictions,
+        'prediction_transform': lambda x: np.log(x+200),
+        'y_transform': y_log_ofs(200),
+        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('svd', TruncatedSVD(10)), ('est', KNeighborsRegressor(100, 'distance', n_jobs=-1))])),
+        'sample': 0.95,
         'n_bags': 4,
     },
 
@@ -1590,6 +1632,14 @@ presets = {
         'predictions': l2_predictions,
         'model': QuantileRegression(),
         'agg': np.mean,
+    },
+
+    'l3-qr-2': {
+        'predictions': l2_predictions,
+        'model': QuantileRegression(),
+        'agg': np.mean,
+        'sample': 0.95,
+        'n_bags': 4,
     },
 }
 
