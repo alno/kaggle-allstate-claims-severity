@@ -61,6 +61,7 @@ class Dataset(object):
         'numeric_rank_norm': 'd2',
         'numeric_combinations': 'd2',
         'numeric_edges': 's2',
+        'numeric_unskew': 'd2',
         'categorical': 'd2',
         'categorical_counts': 'd2',
         'categorical_encoded': 'd2',
