@@ -645,6 +645,8 @@ l1_predictions = [
     '20161104-1604-rf-ce-2-1193.61802',
     '20161114-0459-rf-ce-3-1190.27838',
 
+    '20161130-1854-rf-ce-rot-1259.65839',
+
     '20161028-0031-gb-ce-1151.11060',
 
     '20161124-1845-knn1-1370.65015',
@@ -708,6 +710,7 @@ l2_predictions = [
     '20161130-0109-l2-svd-knn-1128.68593',
     '20161130-0230-l2-svd-svr-1128.15513',
     '20161127-0039-l2-lr-1120.96872',
+    '20161130-2334-l2-qr-1117.22130',
     '20161125-0218-l2-gb-1118.82774',
     '20161125-0753-l2-xgbf-1119.04996',
     '20161130-0258-l2-xgbf-1118.96658',
@@ -1433,6 +1436,21 @@ presets = {
         'param_grid': {'min_samples_leaf': (2, 40), 'max_features': (0.05, 0.95), 'max_depth': (5, 40)},
     },
 
+    'rf-ce-rot': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13')]
+            )],
+        'y_transform': y_log_ofs(200),
+        'n_bags': 15,
+        'sample': 0.8,
+        'feature_sample': 0.8,
+        'svd': 30,
+        'model': Sklearn(RandomForestRegressor(20, max_features=0.62, max_depth=39, min_samples_leaf=5, n_jobs=-1)),
+        'param_grid': {'min_samples_leaf': (2, 40), 'max_features': (0.05, 0.95), 'max_depth': (5, 40)},
+    },
+
     'lr-cd': {
         'features': ['numeric_scaled', 'categorical_dummy'],
         'y_transform': y_log,
@@ -1492,6 +1510,16 @@ presets = {
         'y_transform': y_log_ofs(200),
         'model': Sklearn(Pipeline([('sc', StandardScaler()), ('est', KNeighborsRegressor(20, n_jobs=-1))])),
         'sample': 0.2,
+        'n_bags': 4,
+    },
+
+    'knn3': {
+        'features': ['numeric', 'categorical_encoded'],
+        'y_transform': y_log_ofs(200),
+        'model': Sklearn(Pipeline([('sc', StandardScaler()), ('est', KNeighborsRegressor(20, n_jobs=-1))])),
+        'sample': 0.2,
+        'feature_sample': 0.5,
+        'svd': 30,
         'n_bags': 4,
     },
 
@@ -1570,7 +1598,7 @@ presets = {
             'min_child_weight': 3,
             'lambda': 0.5,
             'alpha': 0.4,
-        }, n_iter=10000, fair=1.0),
+        }, n_iter=5000, fair=1.0),
         'param_grid': {'max_depth': (3, 7), 'min_child_weight': (1, 20), 'lambda': (0, 2.0), 'alpha': (0, 2.0), 'subsample': (0.5, 1.0)},
     },
 
@@ -1621,6 +1649,14 @@ presets = {
         'n_bags': 4,
     },
 
+    'l2-qr': {
+        'predictions': l1_predictions,
+        'model': QuantileRegression(),
+        'feature_sample': 0.7,
+        'svd': 20,
+        'n_bags': 4,
+    },
+
     'l3-nn': {
         'predictions': l2_predictions,
         'n_bags': 4,
@@ -1651,8 +1687,6 @@ feature_builders = preset.get('feature_builders', [])
 
 n_bags = preset.get('n_bags', 1)
 n_splits = preset.get('n_splits', 1)
-
-sample = preset.get('sample', 1)
 
 y_aggregator = preset.get('agg', np.mean)
 y_transform, y_inv_transform = preset.get('y_transform', (lambda y: y, lambda y: y))
@@ -1746,15 +1780,36 @@ for split in xrange(n_splits):
         for bag in xrange(n_bags):
             print "    Training model %d..." % bag
 
-            if sample < 1:
-                bag_train_x, bag_train_y = resample(fold_train_x, fold_train_y, replace=False, n_samples=int(sample * fold_train_x.shape[0]), random_state=42 + 11*split + 13*fold + 17*bag)
-            else:
-                bag_train_x = fold_train_x
-                bag_train_y = fold_train_y
+            rs = np.random.RandomState(101 + 31*split + 13*fold + 29*bag)
+
+            bag_train_x = fold_train_x
+            bag_train_y = fold_train_y
+
+            bag_eval_x = fold_eval_x
+            bag_eval_y = fold_eval_y
+
+            bag_test_x = fold_test_x
+
+            if 'sample' in preset:
+                bag_train_x, bag_train_y = resample(fold_train_x, fold_train_y, replace=False, n_samples=int(preset['sample'] * fold_train_x.shape[0]), random_state=42 + 11*split + 13*fold + 17*bag)
+
+            if 'feature_sample' in preset:
+                features = rs.choice(range(bag_train_x.shape[1]), int(bag_train_x.shape[1] * preset['feature_sample']))
+
+                bag_train_x = bag_train_x[:, features]
+                bag_eval_x = bag_eval_x[:, features]
+                bag_test_x = bag_test_x[:, features]
+
+            if 'svd' in preset:
+                svd = TruncatedSVD(preset['svd'])
+
+                bag_train_x = svd.fit_transform(bag_train_x)
+                bag_eval_x = svd.transform(bag_eval_x)
+                bag_test_x = svd.transform(bag_test_x)
 
             pe, pt = preset['model'].fit_predict(train=(bag_train_x, y_transform(bag_train_y)),
-                                                 val=(fold_eval_x, y_transform(fold_eval_y)),
-                                                 test=(fold_test_x, ),
+                                                 val=(bag_eval_x, y_transform(bag_eval_y)),
+                                                 test=(bag_test_x, ),
                                                  seed=42 + 11*split + 17*fold + 13*bag,
                                                  feature_names=fold_feature_names,
                                                  eval_func=lambda yt, yp: mean_absolute_error(y_inv_transform(yt), y_inv_transform(yp)))
