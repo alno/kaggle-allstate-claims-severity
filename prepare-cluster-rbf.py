@@ -21,15 +21,15 @@ print "Combining data..."
 
 all_data = hstack((scale(vstack((train_num, test_num)).astype(np.float64)).astype(np.float32), vstack((train_cat, test_cat))))
 
-for n_clusters in [50, 100, 200]:
+for n_clusters in [25, 50, 75, 100, 200]:
     part_name = 'cluster_rbf_%d' % n_clusters
 
     print "Finding %d clusters..." % n_clusters
 
-    kmeans = MiniBatchKMeans(n_clusters)
+    kmeans = MiniBatchKMeans(n_clusters, random_state=17 * n_clusters + 11, n_init=5)
     kmeans.fit(all_data)
 
-    print "transforming data..."
+    print "Transforming data..."
 
     cluster_rbf = np.exp(- gamma * kmeans.transform(all_data))
 

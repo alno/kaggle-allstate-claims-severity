@@ -68,7 +68,9 @@ class Dataset(object):
         'categorical_dummy': 's2',
         'svd': 'd2',
         'manual': 'd2',
+        'cluster_rbf_25': 'd2',
         'cluster_rbf_50': 'd2',
+        'cluster_rbf_75': 'd2',
         'cluster_rbf_100': 'd2',
         'cluster_rbf_200': 'd2',
     }
