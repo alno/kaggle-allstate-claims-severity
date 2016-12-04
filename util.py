@@ -46,6 +46,9 @@ def load_csr(filename):
 
 
 def load_prediction(split, name):
+    if split == 'test' and os.path.exists('preds/%s-%s.csv' % (name, 'test-foldavg')):
+        return pd.read_csv('preds/%s-%s.csv' % (name, 'test-foldavg'), index_col='id').iloc[:, 0]
+
     return pd.read_csv('preds/%s-%s.csv' % (name, split), index_col='id').iloc[:, 0]
 
 

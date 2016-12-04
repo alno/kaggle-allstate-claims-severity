@@ -170,10 +170,10 @@ class BaseAlgo(object):
     def fit_predict(self, train, val=None, test=None, **kwa):
         self.fit(train[0], train[1], val[0] if val else None, val[1] if val else None, **kwa)
 
-        val_pred = self.predict(val[0])
-        test_pred = self.predict(test[0])
-
-        return val_pred, test_pred
+        if val is None:
+            return self.predict(test[0])
+        else:
+            return self.predict(val[0]), self.predict(test[0])
 
 
 class Xgb(BaseAlgo):
@@ -203,18 +203,28 @@ class Xgb(BaseAlgo):
         else:
             self.objective = None
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None, size_mult=None):
         feval = lambda y_pred, y_true: ('mae', eval_func(y_true.get_label(), y_pred))
-
-        dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=feature_names)
-        deval = xgb.DMatrix(X_eval, label=y_eval, feature_names=feature_names)
 
         params = self.params.copy()
         params['seed'] = seed
         params['base_score'] = np.median(y_train)
 
+        dtrain = xgb.DMatrix(X_train, label=y_train, feature_names=feature_names)
+
+        if X_eval is None:
+            watchlist = [(dtrain, 'train')]
+        else:
+            deval = xgb.DMatrix(X_eval, label=y_eval, feature_names=feature_names)
+            watchlist = [(deval, 'eval'), (dtrain, 'train')]
+
+        if size_mult is None:
+            n_iter = self.n_iter
+        else:
+            n_iter = int(self.n_iter * size_mult)
+
         self.iter = 0
-        self.model = xgb.train(params, dtrain, self.n_iter, [(deval, 'eval'), (dtrain, 'train')], self.objective, feval, verbose_eval=20)
+        self.model = xgb.train(params, dtrain, n_iter, watchlist, self.objective, feval, verbose_eval=20)
         self.feature_names = feature_names
 
         print "    Feature importances: %s" % ', '.join('%s: %d' % t for t in sorted(self.model.get_fscore().items(), key=lambda t: -t[1]))
@@ -293,7 +303,7 @@ class LightGBM(BaseAlgo):
         for k in params:
             self.params[k] = params[k]
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None, **kwa):
         params = self.params.copy()
         params['bagging_seed'] = seed
         params['feature_fraction_seed'] = seed + 3
@@ -324,7 +334,7 @@ class LibFM(BaseAlgo):
         #    rmtree(self.tmp_dir)
         pass
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None, **kwa):
         if not os.path.exists(self.tmp_dir):
             os.makedirs(self.tmp_dir)
 
@@ -336,9 +346,12 @@ class LibFM(BaseAlgo):
         with open(train_file, 'w') as f:
             dump_svmlight_file(*shuffle(X_train, y_train, random_state=seed), f=f)
 
-        print "Exporting eval..."
-        with open(eval_file, 'w') as f:
-            dump_svmlight_file(X_eval, y_eval, f=f)
+        if X_eval is None:
+            eval_file = train_file
+        else:
+            print "Exporting eval..."
+            with open(eval_file, 'w') as f:
+                dump_svmlight_file(X_eval, y_eval, f=f)
 
         params = self.params.copy()
         params['seed'] = seed
@@ -385,10 +398,10 @@ class Sklearn(BaseAlgo):
     def __init__(self, model):
         self.model = model
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None, **kwa):
         self.model.fit(X_train, y_train)
 
-        if hasattr(self.model, 'staged_predict'):
+        if X_eval is not None and hasattr(self.model, 'staged_predict'):
             for i, p_eval in enumerate(self.model.staged_predict(X_eval)):
                 print "Iter %d score: %.5f" % (i, eval_func(y_eval, p_eval))
 
@@ -436,10 +449,10 @@ class QuantileRegression(object):
     def fit_predict(self, train, val=None, test=None, **kwa):
         model = QuantReg(train[1], train[0]).fit(q=0.5, max_iter=5000)
 
-        val_pred = model.predict(val[0])
-        test_pred = model.predict(test[0])
-
-        return val_pred, test_pred
+        if val is None:
+            return model.predict(test[0])
+        else:
+            return model.predict(val[0]), model.predict(test[0])
 
 
 class Keras(BaseAlgo):
@@ -451,7 +464,7 @@ class Keras(BaseAlgo):
         self.loss = loss
         self.checkpoint = checkpoint
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None, **kwa):
         params = self.params
 
         if callable(params):
@@ -463,7 +476,9 @@ class Keras(BaseAlgo):
             self.scaler = StandardScaler(with_mean=False)
 
             X_train = self.scaler.fit_transform(X_train)
-            X_eval = self.scaler.transform(X_eval)
+
+            if X_eval is not None:
+                X_eval = self.scaler.transform(X_eval)
 
         checkpoint_path = "/tmp/nn-weights-%d.h5" % seed
 
@@ -477,7 +492,7 @@ class Keras(BaseAlgo):
 
         self.model.fit_generator(
             generator=batch_generator(X_train, y_train, params['batch_size'], True), samples_per_epoch=X_train.shape[0],
-            validation_data=batch_generator(X_eval, y_eval, 800), nb_val_samples=X_eval.shape[0],
+            validation_data=batch_generator(X_eval, y_eval, 800) if X_eval is not None else None, nb_val_samples=X_eval.shape[0] if X_eval is not None else None,
             nb_epoch=params['n_epoch'], verbose=1, callbacks=callbacks)
 
         if self.checkpoint and os.path.isfile(checkpoint_path):
@@ -645,12 +660,14 @@ n_folds = 8
 
 
 l1_predictions = [
-    '20161027-2048-lr-ce-1291.06963',
-    '20161112-1927-lr-cd-1247.90719',
-    '20161112-2028-lr-svd-1248.10532',
-    '20161030-0044-lr-cd-nr-1248.64251',
-    '20161119-2107-lr-clrbf-1212.10289',
-    '20161120-1710-lr-svd-clrbf-2-1205.77612',
+    '20161204-2003-lr-ce-1278.84184',
+    '20161204-2029-lr-cd-1237.43406',
+    '20161204-2357-lr-cd-2-1256.45156',
+    '20161204-2047-lr-svd-1237.79692',
+    '20161204-2128-lr-cd-nr-1237.32174',
+    '20161204-2048-lr-svd-clrbf-1210.53687',
+    '20161204-2130-lr-svd-clrbf-2-1202.70592',
+    '20161204-2359-lr-svd-clrbf-3-1212.10956',
 
     '20161027-2330-et-ce-1217.14724',
     '20161104-1322-et-ce-2-1214.13643',
@@ -663,7 +680,7 @@ l1_predictions = [
 
     '20161130-1854-rf-ce-rot-1259.65839',
 
-    '20161028-0031-gb-ce-1151.11060',
+    '20161205-0006-gb-ce-1151.11060',
 
     '20161124-1845-knn1-1370.65015',
     '20161125-0522-knn2-1364.78537',
@@ -694,7 +711,7 @@ l1_predictions = [
 
     '20161028-1005-nn-svd-1144.31187',
 
-    '20161026-1055-lgb1-1135.48359',
+    '20161026-1055-lgb1-1135.48359',  ##
 
     '20161112-0120-lgb-cd-1-1134.15660',
     '20161112-0551-lgb-cd-2-1132.30663',
@@ -711,38 +728,51 @@ l1_predictions = [
     '20161028-0039-xgbf-ce-2-1133.25472',
     '20161027-2321-xgbf-ce-3-1130.03141',
     '20161028-1909-xgbf-ce-4-1129.65181',
-    '20161105-2104-xgbf-ce-5-1138.75039',
+    '20161105-2104-xgbf-ce-5-1138.75039',  ##
+    '20161204-1303-xgbf-ce-5-1131.40964',
     '20161113-1944-xgbf-ce-6-1129.17629',
     '20161114-0641-xgbf-ce-7-1127.24376',
     '20161115-0812-xgbf-ce-8-1124.35470',
     '20161117-0948-xgbf-ce-8-1124.23084',
-    '20161124-0838-xgbf-ce-9-1123.51791',
-    '20161129-0609-xgbf-ce-9-1123.83265',
+    '20161124-0838-xgbf-ce-9-1123.51791',  ##
+    '20161129-0609-xgbf-ce-9-1123.83265',  ##
+    '20161204-1025-xgbf-ce-9-1123.42983',
     '20161201-1548-xgbf-ce-10-1125.78132',
 
     '20161119-2149-xgbf-ce-clrbf-1-1151.82274',
-    '20161120-1506-xgbf-ce-clrbf-2-1140.36323',
+    '20161120-1506-xgbf-ce-clrbf-2-1140.36323',  ##
+    '20161204-2046-xgbf-ce-clrbf-2-1139.21753',
 
-    '20161026-0127-libfm1-1195.55162',
-    '20161122-2028-libfm-svd-1179.83001',
+    '20161205-0123-libfm-cd-1196.11333',
+    '20161122-2028-libfm-svd-1179.83001', ##
 ]
 
 l2_predictions = [
-    '20161129-2258-l2-knn-1129.02808',
-    '20161130-0109-l2-svd-knn-1128.68593',
+    #'20161129-2258-l2-knn-1129.02808',
+    '20161203-0232-l2-knn-1128.52203',
+    #'20161130-0109-l2-svd-knn-1128.68593',
+    '20161203-0135-l2-svd-knn-1128.44971',
     '20161130-0230-l2-svd-svr-1128.15513',
-    '20161127-0039-l2-lr-1120.96872',
-    '20161201-2324-l2-qr-1116.86924',
+    #'20161127-0039-l2-lr-1120.96872',
+    '20161203-0048-l2-lr-1120.15775',
+    #'20161201-2324-l2-qr-1116.86924',
+    '20161203-1716-l2-qr-1116.78581',
     #'20161125-0218-l2-gb-1118.82774',
     '20161202-0020-l2-gb-1118.40560',
+
     #'20161125-0753-l2-xgbf-1119.04996',
     '20161130-0258-l2-xgbf-1118.96658',
     '20161202-0702-l2-xgbf-1118.63437',
+    '20161203-0636-l2-xgbf-1118.58470',
+
     #'20161127-1938-l2-xgbf-2-1118.95698',
     #'20161129-1816-l2-xgbf-2-1118.83511',
     #'20161130-0725-l2-xgbf-2-1118.78277',
     '20161202-1724-l2-xgbf-2-1118.43083',
+
     '20161130-2133-l2-xgbf-3-1118.75364',
+    '20161203-1336-l2-xgbf-3-1118.46005',
+
     #'20161115-1523-l2-nn-1118.50030',
     '20161129-1219-l2-nn-1117.84214',
     '20161202-0157-l2-nn-1117.33963',
@@ -959,14 +989,14 @@ presets = {
 
     'xgbf-ce-5': {
         'features': ['numeric', 'categorical_encoded'],
-        'n_bags': 3,
+        'n_bags': 4,
         'model': Xgb({
             'max_depth': 9,
-            'eta': 0.04,
+            'eta': 0.01,
             'colsample_bytree': 0.4,
             'subsample': 0.95,
             'alpha': 0.9,
-        }, n_iter=1250, fair=150, fair_decay=0.001),
+        }, n_iter=6500, fair=150, fair_decay=0.0003),
     },
 
     'xgbf-ce-6': {
@@ -979,12 +1009,12 @@ presets = {
         'n_bags': 4,
         'model': Xgb({
             'max_depth': 13,
-            'eta': 0.04,
+            'eta': 0.02,
             'colsample_bytree': 0.4,
             'subsample': 0.95,
             'gamma': 0.6,
             'alpha': 0.5,
-        }, n_iter=2700, fair=1),
+        }, n_iter=5400, fair=1),
     },
 
     'xgbf-ce-7': {
@@ -1033,12 +1063,12 @@ presets = {
         'n_bags': 4,
         'model': Xgb({
             'max_depth': 12,
-            'eta': 0.02,
+            'eta': 0.01,
             'colsample_bytree': 0.2,
             'subsample': 0.95,
             'gamma': 1.1,
             'alpha': 0.95,
-        }, n_iter=8000, fair=1),
+        }, n_iter=16000, fair=1),
     },
 
     'xgbf-ce-10': {
@@ -1056,6 +1086,41 @@ presets = {
             'subsample': 0.7,
             'min_child_weight': 100
         }, n_iter=720, fair=0.7),
+    },
+
+    'xgbf-ce-11': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13'), ('cat79', 'cat81'), ('cat81', 'cat13'), ('cat9', 'cat73'), ('cat2', 'cat81'), ('cat80', 'cat111'), ('cat79', 'cat111'), ('cat72', 'cat1'), ('cat23', 'cat103'), ('cat89', 'cat13'), ('cat57', 'cat14'), ('cat80', 'cat81'), ('cat81', 'cat11'), ('cat9', 'cat103'), ('cat23', 'cat36')]
+            )],
+        'n_bags': 4,
+        'model': Xgb({
+            'max_depth': 12,
+            'eta': 0.04,
+            'colsample_bytree': 0.2,
+            'subsample': 0.75,
+            'gamma': 2.0,
+            'alpha': 2.0,
+        }, n_iter=10000, fair=200),
+    },
+
+    'xgbf-ce-12': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13')]
+            )],
+        'y_transform': y_norm,
+        'n_bags': 4,
+        'model': Xgb({
+            'max_depth': 13,
+            'eta': 0.01,
+            'colsample_bytree': 0.2,
+            'subsample': 0.95,
+            'gamma': 1.15,
+            'alpha': 1.0,
+        }, n_iter=16000, fair=1),
     },
 
     'xgbf-ce-tst': {
@@ -1109,15 +1174,15 @@ presets = {
 
     'xgbf-ce-clrbf-2': {
         'features': ['numeric', 'categorical_encoded', 'cluster_rbf_50'],
-        'n_bags': 3,
+        'n_bags': 4,
         'model': Xgb({
             'max_depth': 8,
-            'eta': 0.04,
+            'eta': 0.01,
             'colsample_bytree': 0.4,
             'subsample': 0.95,
             'alpha': 0.9,
             'lambda': 2.1
-        }, n_iter=1100, fair=150),
+        }, n_iter=4400, fair=150),
     },
 
     'xgbf-tst': {
@@ -1291,15 +1356,15 @@ presets = {
         'y_transform': y_log,
         'model': LibFM(params={
             'method': 'sgd',
-            'learn_rate': 0.00007,
-            'iter': 260,
+            'learn_rate': 0.00005,
+            'iter': 365,
             'dim': '1,1,12',
             'regular': '0,0,0.0002'
         }),
     },
 
     'libfm-svd-clrbf': {
-        'features': ['svd', 'cluster_rbf_50', 'cluster_rbf_100', 'cluster_rbf_200'],
+        'features': ['svd', 'cluster_rbf_25'],
         'y_transform': y_log,
         'model': LibFM(params={
             'method': 'sgd',
@@ -1540,7 +1605,14 @@ presets = {
 
     'lr-cd': {
         'features': ['numeric_scaled', 'categorical_dummy'],
-        'y_transform': y_log,
+        'y_transform': y_log_ofs(200),
+        'model': Sklearn(Ridge(1e-3)),
+        'param_grid': {'C': (1e-3, 1e3)},
+    },
+
+    'lr-cd-2': {
+        'features': ['numeric_scaled', 'categorical_dummy'],
+        'y_transform': y_norm,
         'model': Sklearn(Ridge(1e-3)),
         'param_grid': {'C': (1e-3, 1e3)},
     },
@@ -1558,19 +1630,19 @@ presets = {
 
     'lr-cd-nr': {
         'features': ['numeric_rank_norm', 'categorical_dummy'],
-        'y_transform': y_log,
+        'y_transform': y_log_ofs(200),
         'model': Sklearn(Ridge(1e-3)),
     },
 
     'lr-ce': {
         'features': ['numeric', 'categorical_encoded'],
-        'y_transform': y_log,
+        'y_transform': y_log_ofs(200),
         'model': Sklearn(Pipeline([('sc', StandardScaler(with_mean=False)), ('lr', Ridge(1e-3))])),
     },
 
     'lr-svd': {
         'features': ['svd'],
-        'y_transform': y_log,
+        'y_transform': y_log_ofs(200),
         'model': Sklearn(Ridge(1e-3)),
     },
 
@@ -1581,8 +1653,20 @@ presets = {
     },
 
     'lr-svd-clrbf-2': {
-        'features': ['svd', 'cluster_rbf_50', 'cluster_rbf_100', 'cluster_rbf_200'],
+        'features': ['svd', 'cluster_rbf_25', 'cluster_rbf_50', 'cluster_rbf_75', 'cluster_rbf_100', 'cluster_rbf_200'],
         'y_transform': y_log_ofs(200),
+        'model': Sklearn(Ridge(1e-3)),
+    },
+
+    'lr-svd-clrbf-3': {
+        'features': ['svd', 'cluster_rbf_25', 'cluster_rbf_50', 'cluster_rbf_75', 'cluster_rbf_100', 'cluster_rbf_200'],
+        'y_transform': y_norm,
+        'model': Sklearn(Ridge(1e-3)),
+    },
+
+    'lr-svd-clrbf-4': {
+        'features': ['svd', 'cluster_rbf_25', 'cluster_rbf_50', 'cluster_rbf_75', 'cluster_rbf_100', 'cluster_rbf_200'],
+        'y_transform': y_log,
         'model': Sklearn(Ridge(1e-3)),
     },
 
@@ -1629,19 +1713,19 @@ presets = {
     'l2-nn': {
         'predictions': l1_predictions,
         'n_bags': 4,
-        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'layers': [50], 'dropouts': [0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3), ExponentialMovingAverage(save_mv_ave_model=False)]}),
+        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'layers': [50], 'dropouts': [0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}), # ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3),
     },
 
     'l2-nn-2': {
         'predictions': l1_predictions,
         'n_bags': 6,
-        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 40, 'batch_size': 128, 'layers': [200, 50], 'dropouts': [0.15, 0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3)]}),
+        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 40, 'batch_size': 128, 'layers': [200, 50], 'dropouts': [0.15, 0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': []}), # ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3)
     },
 
     'l2-nn-3': {
         'predictions': l1_predictions,
         'n_bags': 4,
-        'model': Keras(nn_mlp, lambda: {'l1': 3e-6, 'l2': 3e-6, 'n_epoch': 70, 'batch_size': 128, 'layers': [200, 100], 'dropouts': [0.15, 0.15], 'optimizer': SGD(1e-4, momentum=0.9, nesterov=True, decay=3e-5), 'callbacks': [ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3)]}),
+        'model': Keras(nn_mlp, lambda: {'l1': 3e-6, 'l2': 3e-6, 'n_epoch': 70, 'batch_size': 128, 'layers': [200, 100], 'dropouts': [0.15, 0.15], 'optimizer': SGD(1e-4, momentum=0.9, nesterov=True, decay=3e-5), 'callbacks': []}), # ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3)
     },
 
     'l2-lr': {
@@ -1772,6 +1856,16 @@ presets = {
         'sample': 0.95,
         'n_bags': 4,
     },
+
+    'l3-qr-3': {
+        'predictions': l2_predictions,
+        'model': QuantileRegression(),
+        'agg': np.mean,
+        'sample': 0.95,
+        'feature_sample': 0.9,
+        'svd': 10,
+        'n_bags': 6,
+    },
 }
 
 print "Preset: %s" % args.preset
@@ -1824,8 +1918,9 @@ if args.optimize:
 
 print "Loading test data..."
 test_x = load_x('test', preset)
-test_p = np.zeros((test_x.shape[0], n_splits * n_bags * n_folds))
 test_r = Dataset.load('test', parts=np.unique([b.requirements for b in feature_builders]))
+test_foldavg_p = np.zeros((test_x.shape[0], n_splits * n_bags * n_folds))
+test_fulltrain_p = np.zeros((test_x.shape[0], n_bags))
 
 maes = []
 
@@ -1889,7 +1984,7 @@ for split in xrange(n_splits):
                 bag_train_x, bag_train_y = resample(fold_train_x, fold_train_y, replace=False, n_samples=int(preset['sample'] * fold_train_x.shape[0]), random_state=42 + 11*split + 13*fold + 17*bag)
 
             if 'feature_sample' in preset:
-                features = rs.choice(range(bag_train_x.shape[1]), int(bag_train_x.shape[1] * preset['feature_sample']))
+                features = rs.choice(range(bag_train_x.shape[1]), int(bag_train_x.shape[1] * preset['feature_sample']), replace=False)
 
                 bag_train_x = bag_train_x[:, features]
                 bag_eval_x = bag_eval_x[:, features]
@@ -1910,7 +2005,7 @@ for split in xrange(n_splits):
                                                  eval_func=lambda yt, yp: mean_absolute_error(y_inv_transform(yt), y_inv_transform(yp)))
 
             eval_p[:, bag] += pe
-            test_p[:, split * n_folds * n_bags + fold * n_bags + bag] = pt
+            test_foldavg_p[:, split * n_folds * n_bags + fold * n_bags + bag] = pt
 
             train_p[fold_eval_idx, split * n_bags + bag] = pe
 
@@ -1928,10 +2023,72 @@ for split in xrange(n_splits):
         # Free mem
         del fold_train_x, fold_train_y, fold_eval_x, fold_eval_y
 
+if True:
+    print
+    print "  Full..."
+
+    full_train_x = train_x
+    full_train_y = train_y
+    full_train_r = train_r
+
+    full_test_x = test_x
+    full_test_r = test_r
+
+    full_feature_names = list(feature_names)
+
+    if len(feature_builders) > 0:  # TODO: Move inside of bagging loop
+        print "    Building per-fold features..."
+
+        full_train_x = [full_train_x]
+        full_test_x = [full_test_x]
+
+        for fb in feature_builders:
+            full_train_x.append(fb.fit_transform(full_train_r))
+            full_test_x.append(fb.transform(full_test_r))
+            full_feature_names += fb.get_feature_names()
+
+        full_train_x = hstack(full_train_x)
+        full_test_x = hstack(full_test_x)
+
+    for bag in xrange(n_bags):
+        print "    Training model %d..." % bag
+
+        rs = np.random.RandomState(101 + 31*split + 13*fold + 29*bag)
+
+        bag_train_x = full_train_x
+        bag_train_y = full_train_y
+
+        bag_test_x = full_test_x
+
+        if 'sample' in preset:
+            bag_train_x, bag_train_y = resample(bag_train_x, bag_train_y, replace=False, n_samples=int(preset['sample'] * bag_train_x.shape[0]), random_state=42 + 11*split + 13*fold + 17*bag)
+
+        if 'feature_sample' in preset:
+            features = rs.choice(range(bag_train_x.shape[1]), int(bag_train_x.shape[1] * preset['feature_sample']), replace=False)
+
+            bag_train_x = bag_train_x[:, features]
+            bag_test_x = bag_test_x[:, features]
+
+        if 'svd' in preset:
+            svd = TruncatedSVD(preset['svd'])
+
+            bag_train_x = svd.fit_transform(bag_train_x)
+            bag_test_x = svd.transform(bag_test_x)
+
+        pt = preset['model'].fit_predict(train=(bag_train_x, y_transform(bag_train_y)),
+                                         test=(bag_test_x, ),
+                                         seed=42 + 11*split + 17*fold + 13*bag,
+                                         feature_names=fold_feature_names,
+                                         eval_func=lambda yt, yp: mean_absolute_error(y_inv_transform(yt), y_inv_transform(yp)),
+                                         size_mult=n_folds / (n_folds - 1.0))
+
+        test_fulltrain_p[:, bag] = pt
+
 
 # Aggregate predictions
 train_p = pd.Series(y_aggregator(y_inv_transform(train_p), axis=1), index=Dataset.load_part('train', 'id'))
-test_p = pd.Series(y_aggregator(y_inv_transform(test_p), axis=1), index=Dataset.load_part('test', 'id'))
+test_foldavg_p = pd.Series(y_aggregator(y_inv_transform(test_foldavg_p), axis=1), index=Dataset.load_part('test', 'id'))
+test_fulltrain_p = pd.Series(y_aggregator(y_inv_transform(test_fulltrain_p), axis=1), index=Dataset.load_part('test', 'id'))
 
 # Analyze predictions
 mae_mean = np.mean(maes)
@@ -1947,7 +2104,7 @@ name = "%s-%s-%.5f" % (datetime.datetime.now().strftime('%Y%m%d-%H%M'), args.pre
 print
 print "Saving predictions... (%s)" % name
 
-for part, pred in [('train', train_p), ('test', test_p)]:
+for part, pred in [('train', train_p), ('test-foldavg', test_foldavg_p), ('test-fulltrain', test_fulltrain_p)]:
     pred.rename('loss', inplace=True)
     pred.index.rename('id', inplace=True)
     pred.to_csv('preds/%s-%s.csv' % (name, part), header=True)
