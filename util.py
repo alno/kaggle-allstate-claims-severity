@@ -45,11 +45,16 @@ def load_csr(filename):
     return sp.csr_matrix((loader['data'], loader['indices'], loader['indptr']), shape=loader['shape'])
 
 
-def load_prediction(split, name):
-    if split == 'test' and os.path.exists('preds/%s-%s.csv' % (name, 'test-foldavg')):
-        return pd.read_csv('preds/%s-%s.csv' % (name, 'test-foldavg'), index_col='id').iloc[:, 0]
+def load_prediction(split, name, mode='fulltrain'):
+    if type(name) is list:
+        preds = [load_prediction(split, n, mode) for n in name]
 
-    return pd.read_csv('preds/%s-%s.csv' % (name, split), index_col='id').iloc[:, 0]
+        return sum(preds) / len(preds)
+    else:
+        if split == 'test' and os.path.exists('preds/%s-%s.csv' % (name, 'test-%s' % mode)):
+            return pd.read_csv('preds/%s-%s.csv' % (name, 'test-%s' % mode), index_col='id').iloc[:, 0]
+
+        return pd.read_csv('preds/%s-%s.csv' % (name, split), index_col='id').iloc[:, 0]
 
 
 class Dataset(object):

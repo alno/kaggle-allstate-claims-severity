@@ -203,7 +203,7 @@ class Xgb(BaseAlgo):
         else:
             self.objective = None
 
-    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None, size_mult=None):
+    def fit(self, X_train, y_train, X_eval=None, y_eval=None, seed=42, feature_names=None, eval_func=None, size_mult=None, name=None):
         feval = lambda y_pred, y_true: ('mae', eval_func(y_true.get_label(), y_pred))
 
         params = self.params.copy()
@@ -225,6 +225,7 @@ class Xgb(BaseAlgo):
 
         self.iter = 0
         self.model = xgb.train(params, dtrain, n_iter, watchlist, self.objective, feval, verbose_eval=20)
+        self.model.dump_model('xgb-%s.dump' % name, with_stats=True)
         self.feature_names = feature_names
 
         print "    Feature importances: %s" % ', '.join('%s: %d' % t for t in sorted(self.model.get_fscore().items(), key=lambda t: -t[1]))
@@ -309,7 +310,11 @@ class LightGBM(BaseAlgo):
         params['feature_fraction_seed'] = seed + 3
 
         self.model = GBMRegressor(**params)
-        self.model.fit(X_train, y_train, test_data=[(X_eval, y_eval)])
+
+        if X_eval is None:
+            self.model.fit(X_train, y_train)
+        else:
+            self.model.fit(X_train, y_train, test_data=[(X_eval, y_eval)])
 
     def predict(self, X):
         return self.model.predict(X)
@@ -447,7 +452,7 @@ class Sklearn(BaseAlgo):
 class QuantileRegression(object):
 
     def fit_predict(self, train, val=None, test=None, **kwa):
-        model = QuantReg(train[1], train[0]).fit(q=0.5, max_iter=5000)
+        model = QuantReg(train[1], train[0]).fit(q=0.5, max_iter=10000)
 
         if val is None:
             return model.predict(test[0])
@@ -595,7 +600,7 @@ def nn_maxout(input_shape, params):
 
 def load_x(ds, preset):
     feature_parts = [Dataset.load_part(ds, part) for part in preset.get('features', [])]
-    prediction_parts = [load_prediction(ds, p) for p in preset.get('predictions', [])]
+    prediction_parts = [load_prediction(ds, p, mode=preset.get('predictions_mode', 'fulltrain')) for p in preset.get('predictions', [])]
     prediction_parts = [p.clip(lower=0.1).values.reshape((p.shape[0], 1)) for p in prediction_parts]
 
     if 'prediction_transform' in preset:
@@ -610,10 +615,28 @@ def extract_feature_names(preset):
     for part in preset.get('features', []):
         x += Dataset.get_part_features(part)
 
+    lp = 1
     for pred in preset.get('predictions', []):
-        x.append(pred)
+        if type(pred) is list:
+            x.append('pred_%d' % lp)
+            lp += 1
+        else:
+            x.append(pred)
 
     return x
+
+
+def add_powers(x, feature_names, powers):
+    res_feature_names = list(feature_names)
+    res = [x]
+
+    for p in powers:
+        res.append(x ** p)
+
+        for f in feature_names:
+            res_feature_names.append("%s^%s" % (f, str(p)))
+
+    return hstack(res), res_feature_names
 
 
 norm_y_lambda = 0.7
@@ -637,6 +660,26 @@ def y_log_ofs(ofs):
 
     def inv_transform(yl):
         return np.clip(np.exp(yl) - ofs, 1.0, np.inf)
+
+    return transform, inv_transform
+
+
+def y_pow(p):
+    def transform(y):
+        return y ** p
+
+    def inv_transform(y):
+        return y ** (1 / p)
+
+    return transform, inv_transform
+
+
+def y_pow_ofs(p, ofs):
+    def transform(y):
+        return (y + ofs) ** p
+
+    def inv_transform(y):
+        return np.clip(y ** (1 / p) - ofs, 1.0, np.inf)
 
     return transform, inv_transform
 
@@ -669,119 +712,137 @@ l1_predictions = [
     '20161204-2130-lr-svd-clrbf-2-1202.70592',
     '20161204-2359-lr-svd-clrbf-3-1212.10956',
 
-    '20161027-2330-et-ce-1217.14724',
-    '20161104-1322-et-ce-2-1214.13643',
-    '20161104-1432-et-ce-3-1199.82233',
-    '20161114-0336-et-ce-4-1194.75138',
+    '20161207-0538-et-ce-1207.07344',
+    '20161207-0601-et-ce-2-1204.68542',
+    '20161207-0618-et-ce-3-1199.82233',
+    '20161207-0030-et-ce-4-1194.75138',
 
-    '20161027-2340-rf-ce-1200.99200',
-    '20161104-1604-rf-ce-2-1193.61802',
-    '20161114-0459-rf-ce-3-1190.27838',
+    '20161207-0309-rf-ce-2-1193.61802',
+    '20161206-2200-rf-ce-3-1190.27838',
+    '20161207-0257-rf-ce-4-1186.23675',
 
-    '20161130-1854-rf-ce-rot-1259.65839',
+    '20161207-1041-rf-ce-rot-1-1236.84994',
 
     '20161205-0006-gb-ce-1151.11060',
 
-    '20161124-1845-knn1-1370.65015',
-    '20161125-0522-knn2-1364.78537',
+    '20161207-1643-knn1-1370.65015',
+    '20161207-2025-knn2-1364.78537',
 
-    '20161125-0207-svr1-1224.28418',
+    '20161208-0022-svr1-1224.28418',
 
-    '20161013-1512-xgb1-1146.11469',
-    '20161027-0203-xgb3-1136.95146',
-    '20161019-1805-xgb5-1138.26298',
+    '20161210-1914-nn-cd-2-1134.92794',
+    '20161210-1651-nn-cd-3-1132.48048',
+    '20161206-2201-nn-cd-4-1132.05160',
 
-    '20161018-1033-nn2-1138.11347',
-    '20161019-2334-nn5-1142.50482',
+    '20161210-1142-nn-cd-clrbf-1132.71487',
+    '20161207-1509-nn-cd-clrbf-2-1131.72969',
+    '20161209-1459-nn-cd-clrbf-3-1132.49145',
+    '20161127-2119-nn-cd-clrbf-4-1136.33283',#
+    '20161209-0136-nn-cd-clrbf-5-1131.69357',
+    '20161201-0719-nn-cd-clrbf-6-1145.02510',#
+    '20161211-0636-nn-cd-clrbf-7-1133.32506',
 
-    '20161105-1053-nn-cd-2-1135.09238',
-    '20161112-1903-nn-cd-3-1133.89751',
-    '20161114-0046-nn-cd-3-1132.74636',
+    '20161207-0622-nn-svd-cd-clrbf-1-1130.29286',
+    '20161201-2010-nn-svd-cd-clrbf-2-1135.79176',#
+    '20161206-1656-nn-svd-cd-clrbf-3-1132.02805',
 
-    '20161120-1618-nn-cd-clrbf-1132.30517',
-    '20161122-0610-nn-cd-clrbf-2-1131.97963',
-    '20161127-0809-nn-cd-clrbf-3-1132.09064',
-    '20161127-2119-nn-cd-clrbf-4-1136.33283',
-    '20161128-2105-nn-cd-clrbf-5-1131.52630',
-    '20161201-0719-nn-cd-clrbf-6-1145.02510',
-    '20161202-0707-nn-cd-clrbf-7-1133.32506',
+    '20161211-0413-lgb-cd-1-1133.89988',
+    '20161207-2034-lgb-cd-2-1131.65831',
 
-    '20161129-1813-nn-svd-cd-clrbf-1131.11904',
-    '20161201-2010-nn-svd-cd-clrbf-2-1135.79176',
+    '20161209-1932-lgb-ce-1-1129.07923',
+    '20161206-1926-lgb-ce-2-1127.68636',
 
-    '20161028-1005-nn-svd-1144.31187',
+    '20161209-0939-xgb-ce-2-1133.00048',
+    '20161208-1351-xgb-ce-3-1132.08820',
 
-    '20161026-1055-lgb1-1135.48359',  ##
-
-    '20161112-0120-lgb-cd-1-1134.15660',
-    '20161112-0551-lgb-cd-2-1132.30663',
-
-    '20161201-1032-lgb-ce-1130.49166',
-
-    '20161022-1736-xgb7-1138.66039',
-    '20161027-1932-xgb-ce-2-1134.04010',
-    '20161028-1420-xgb-ce-3-1132.58408',
-
-    '20161023-0643-xgbf1-1133.28725',
-    '20161025-1849-xgbf3-1133.20314',
-
-    '20161028-0039-xgbf-ce-2-1133.25472',
-    '20161027-2321-xgbf-ce-3-1130.03141',
-    '20161028-1909-xgbf-ce-4-1129.65181',
-    '20161105-2104-xgbf-ce-5-1138.75039',  ##
+    '20161209-1442-xgbf-ce-2-1133.85036',
+    '20161209-1109-xgbf-ce-3-1128.63753',
+    '20161208-1109-xgbf-ce-4-1128.84209',
+    '20161208-2307-xgbf-ce-4-2-1126.89842',
     '20161204-1303-xgbf-ce-5-1131.40964',
-    '20161113-1944-xgbf-ce-6-1129.17629',
-    '20161114-0641-xgbf-ce-7-1127.24376',
-    '20161115-0812-xgbf-ce-8-1124.35470',
-    '20161117-0948-xgbf-ce-8-1124.23084',
-    '20161124-0838-xgbf-ce-9-1123.51791',  ##
-    '20161129-0609-xgbf-ce-9-1123.83265',  ##
+    '20161205-1313-xgbf-ce-6-1128.77616',
+    '20161206-1400-xgbf-ce-7-1126.68014',
+    '20161207-0946-xgbf-ce-8-1124.33319',
     '20161204-1025-xgbf-ce-9-1123.42983',
-    '20161201-1548-xgbf-ce-10-1125.78132',
+    '20161207-2128-xgbf-ce-10-1125.78132',
+    '20161206-0327-xgbf-ce-12-1138.85463',
+    '20161207-0954-xgbf-ce-13-1122.64977',
+    '20161210-0733-xgbf-ce-14-1125.56181',
 
-    '20161119-2149-xgbf-ce-clrbf-1-1151.82274',
-    '20161120-1506-xgbf-ce-clrbf-2-1140.36323',  ##
+    '20161209-0336-xgbf-ce-clrbf-1-1151.51483',
     '20161204-2046-xgbf-ce-clrbf-2-1139.21753',
 
     '20161205-0123-libfm-cd-1196.11333',
-    '20161122-2028-libfm-svd-1179.83001', ##
+    '20161205-1342-libfm-svd-1177.69251',
 ]
 
 l2_predictions = [
-    #'20161129-2258-l2-knn-1129.02808',
-    '20161203-0232-l2-knn-1128.52203',
-    #'20161130-0109-l2-svd-knn-1128.68593',
-    '20161203-0135-l2-svd-knn-1128.44971',
-    '20161130-0230-l2-svd-svr-1128.15513',
-    #'20161127-0039-l2-lr-1120.96872',
-    '20161203-0048-l2-lr-1120.15775',
-    #'20161201-2324-l2-qr-1116.86924',
-    '20161203-1716-l2-qr-1116.78581',
-    #'20161125-0218-l2-gb-1118.82774',
-    '20161202-0020-l2-gb-1118.40560',
+    [
+        '20161209-2249-l2-knn-1128.69039',
+        '20161209-2321-l2-svd-knn-1128.60543',
 
-    #'20161125-0753-l2-xgbf-1119.04996',
-    '20161130-0258-l2-xgbf-1118.96658',
-    '20161202-0702-l2-xgbf-1118.63437',
-    '20161203-0636-l2-xgbf-1118.58470',
+        '20161203-0232-l2-knn-1128.52203',
+        '20161203-0135-l2-svd-knn-1128.44971',
+        '20161130-0230-l2-svd-svr-1128.15513',
+    ],
 
-    #'20161127-1938-l2-xgbf-2-1118.95698',
-    #'20161129-1816-l2-xgbf-2-1118.83511',
-    #'20161130-0725-l2-xgbf-2-1118.78277',
-    '20161202-1724-l2-xgbf-2-1118.43083',
+    [
+        '20161210-2219-l2-lr-1119.94373',
+        '20161210-2219-l2-lr-2-1118.49848',
+        '20161210-2220-l2-lr-3-1118.45564',
+    ],
 
-    '20161130-2133-l2-xgbf-3-1118.75364',
-    '20161203-1336-l2-xgbf-3-1118.46005',
+    [
+        '20161205-0025-l2-qr-1117.03435',
+        '20161207-0053-l2-qr-1116.97884',
+        '20161209-1948-l2-qr-1116.63408',
+    ],
 
-    #'20161115-1523-l2-nn-1118.50030',
-    '20161129-1219-l2-nn-1117.84214',
-    '20161202-0157-l2-nn-1117.33963',
+    [
+        '20161209-2101-l2-gb-1117.93768',
+        '20161202-0020-l2-gb-1118.40560',
+    ],
 
-    '20161124-1430-l2-nn-2-1117.28245',
-    '20161125-0958-l2-nn-2-1117.29028',
-    '20161129-1021-l2-nn-2-1117.39540',
-    '20161129-2228-l2-nn-2-1117.01003',
-    '20161202-0007-l2-nn-2-1116.65633',
+    [
+        '20161125-0753-l2-xgbf-1119.04996',
+        '20161130-0258-l2-xgbf-1118.96658', #
+        '20161202-0702-l2-xgbf-1118.63437', #
+        '20161203-0636-l2-xgbf-1118.58470', #
+        '20161210-0712-l2-xgbf-1118.33470',
+    ],
+
+    [
+        '20161202-1724-l2-xgbf-2-1118.43083',
+        '20161210-1952-l2-xgbf-2-1118.15322',
+
+        '20161130-2133-l2-xgbf-3-1118.75364', #
+        '20161203-1336-l2-xgbf-3-1118.46005', #
+        '20161211-0607-l2-xgbf-3-1118.16984',
+    ],
+
+    [
+        '20161129-1219-l2-nn-1117.84214', #
+        '20161202-0157-l2-nn-1117.33963', #
+        '20161205-0337-l2-nn-1117.09224',
+        '20161208-0126-l2-nn-1117.15231',
+        '20161209-1814-l2-nn-1117.10987',
+    ],
+
+    [
+        '20161124-1430-l2-nn-2-1117.28245', #
+        '20161125-0958-l2-nn-2-1117.29028', #
+        '20161129-1021-l2-nn-2-1117.39540', #
+        '20161129-2228-l2-nn-2-1117.01003', #
+        '20161202-0007-l2-nn-2-1116.65633', #
+        '20161207-2324-l2-nn-2-1116.84297',
+    ],
+
+    [
+        '20161210-0302-l2-nn-3-1116.53105',
+
+        '20161208-1708-l2-nn-5-1116.86086',
+        '20161210-0624-l2-nn-5-1116.83111',
+    ]
 ]
 
 presets = {
@@ -821,7 +882,7 @@ presets = {
     'xgb-ce-2': {
         'features': ['numeric', 'categorical_encoded'],
         'y_transform': y_log_ofs(200),
-        'n_bags': 2,
+        'n_bags': 4,
         'model': Xgb({
             'max_depth': 12,
             'eta': 0.01,
@@ -835,7 +896,7 @@ presets = {
     'xgb-ce-3': {
         'features': ['numeric', 'categorical_encoded'],
         'y_transform': y_log_ofs(200),
-        'n_bags': 2,
+        'n_bags': 4,
         'model': Xgb({
             'max_depth': 14,
             'eta': 0.01,
@@ -945,45 +1006,45 @@ presets = {
     'xgbf-ce-3': {
         'features': ['numeric', 'categorical_encoded'],
         'y_transform': y_norm,
-        'n_bags': 2,
+        'n_bags': 4,
         'model': Xgb({
             'max_depth': 12,
-            'eta': 0.04,
+            'eta': 0.02,
             'colsample_bytree': 0.4,
             'subsample': 0.95,
             'gamma': 0.5,
             'alpha': 0.5,
-        }, n_iter=2000, fair=1),
+        }, n_iter=4000, fair=1),
         'param_grid': {'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]},
     },
 
     'xgbf-ce-4': {
         'features': ['numeric', 'categorical_encoded'],
         'y_transform': y_norm,
-        'n_bags': 2,
+        'n_bags': 4,
         'model': Xgb({
             'max_depth': 15,
-            'eta': 0.04,
+            'eta': 0.02,
             'colsample_bytree': 0.4,
             'subsample': 0.95,
             'gamma': 0.6,
             'alpha': 0.5,
-        }, n_iter=2700, fair=1),
+        }, n_iter=5400, fair=1),
         'param_grid': {'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]},
     },
 
     'xgbf-ce-4-2': {
         'features': ['numeric', 'categorical_encoded'],
         'y_transform': y_log,
-        'n_bags': 2,
+        'n_bags': 4,
         'model': Xgb({
             'max_depth': 15,
-            'eta': 0.04,
+            'eta': 0.02,
             'colsample_bytree': 0.4,
             'subsample': 0.95,
             'gamma': 1.5,
             'alpha': 1.0,
-        }, n_iter=2700, fair=1),
+        }, n_iter=5400, fair=1),
         'param_grid': {'max_depth': [6, 7, 8], 'min_child_weight': [3, 4, 5]},
     },
 
@@ -1027,12 +1088,12 @@ presets = {
         'n_bags': 4,
         'model': Xgb({
             'max_depth': 13,
-            'eta': 0.04,
+            'eta': 0.02,
             'colsample_bytree': 0.4,
             'subsample': 0.95,
             'gamma': 1.2,
             'alpha': 1.0,
-        }, n_iter=2500, fair=1),
+        }, n_iter=5000, fair=1),
     },
 
     'xgbf-ce-8': {
@@ -1123,41 +1184,58 @@ presets = {
         }, n_iter=16000, fair=1),
     },
 
-    'xgbf-ce-tst': {
-        'features': ['numeric', 'manual'],
-        'feature_builders': [
-            CategoricalAlphaEncoded(
-                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13')]
-            )],
-        'y_transform': y_log_ofs(200),
-        'n_bags': 4,
-        'model': Xgb({
-            'max_depth': 13,
-            'eta': 0.02,
-            'colsample_bytree': 0.2,
-            'subsample': 0.95,
-            'gamma': 1.15,
-            'alpha': 1.0,
-        }, n_iter=8000, fair=1),
-        'param_grid': {'gamma': [0.9, 1.2], 'alpha': [0.8, 1.2], 'colsample_bytree': [0.15, 0.25]},
-    },
-
-    'xgbf-ce-tst-2': {
+    'xgbf-ce-13': {
         'features': ['numeric'],
         'feature_builders': [
             CategoricalAlphaEncoded(
-                combinations=itertools.combinations('cat80,cat87,cat57,cat12,cat79,cat10,cat7,cat89,cat2,cat72,cat81,cat11,cat1,cat13,cat9,cat3,cat16,cat90,cat23,cat36,cat73,cat103,cat40,cat28,cat111,cat6,cat76,cat50,cat5,cat4,cat14,cat38,cat24,cat82,cat25'.split(','), 2)
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13'), ('cat79', 'cat81'), ('cat81', 'cat13'), ('cat9', 'cat73'), ('cat2', 'cat81'), ('cat80', 'cat111'), ('cat79', 'cat111'), ('cat72', 'cat1'), ('cat23', 'cat103'), ('cat89', 'cat13'), ('cat57', 'cat14'), ('cat80', 'cat81'), ('cat81', 'cat11'), ('cat9', 'cat103'), ('cat23', 'cat36')]
             )],
-        'y_transform': y_log_ofs(200),
+        'y_transform': y_pow(0.25),
         'n_bags': 4,
         'model': Xgb({
-            'max_depth': 13,
-            'eta': 0.02,
+            'max_depth': 12,
+            'eta': 0.007,
             'colsample_bytree': 0.2,
             'subsample': 0.95,
-            'gamma': 1.15,
-            'alpha': 1.0,
-        }, n_iter=2000, fair=1),
+            'gamma': 2.2,
+            'alpha': 1.2,
+        }, n_iter=8000, fair=1),
+    },
+
+    'xgbf-ce-14': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat101', 'cat80'), ('cat79', 'cat80'), ('cat12', 'cat80'), ('cat101', 'cat81'), ('cat12', 'cat81'), ('cat12', 'cat79'), ('cat57', 'cat79'), ('cat1', 'cat80'), ('cat101', 'cat79'), ('cat1', 'cat81')]
+            )],
+        'y_transform': y_pow_ofs(0.202, 5),
+        'n_bags': 4,
+        'model': Xgb({
+            'max_depth': 12,
+            'eta': 0.01,
+            'colsample_bytree': 0.2,
+            'subsample': 0.95,
+            'gamma': 1.3,
+            'alpha': 0.6,
+        }, n_iter=8000, fair=2.0),
+    },
+
+    'xgbf-ce-15': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13'), ('cat79', 'cat81'), ('cat81', 'cat13'), ('cat9', 'cat73'), ('cat2', 'cat81'), ('cat80', 'cat111'), ('cat79', 'cat111'), ('cat72', 'cat1'), ('cat23', 'cat103'), ('cat89', 'cat13'), ('cat57', 'cat14'), ('cat80', 'cat81'), ('cat81', 'cat11'), ('cat9', 'cat103'), ('cat23', 'cat36')]
+            )],
+        'y_transform': y_pow(0.24),
+        'n_bags': 6,
+        'model': Xgb({
+            'max_depth': 12,
+            'eta': 0.005,
+            'colsample_bytree': 0.2,
+            'subsample': 0.95,
+            'gamma': 2.2,
+            'alpha': 1.2,
+        }, n_iter=11000, fair=1),
     },
 
     'xgbf-ce-clrbf-1': {
@@ -1219,35 +1297,20 @@ presets = {
         }, n_iter=500, fair=1),
     },
 
-    'lgb-ce': {
-        'features': ['numeric', 'categorical_encoded'],
-        'y_transform': y_norm,
-        'n_bags': 2,
+    'lgb-tst': {
+        'features': ['numeric'],
+        'y_transform': y_log_ofs(200),
+        'n_bags': 1,
         'model': LightGBM({
-            'num_iterations': 5500,
-            'learning_rate': 0.004,
-            'num_leaves': 250,
-            'min_data_in_leaf': 4,
-            'feature_fraction': 0.3,
-            'bagging_fraction': 0.95,
-            'bagging_freq': 5,
-            'metric_freq': 10
-        }),
-    },
-
-    'lgb-ce-tst': {
-        'features': ['numeric', 'categorical_encoded'],
-        'y_transform': y_norm,
-        'n_bags': 2,
-        'model': LightGBM({
-            'num_iterations': 5500,
-            'learning_rate': 0.004,
-            'num_leaves': 250,
-            'min_data_in_leaf': 4,
-            'feature_fraction': 0.3,
-            'bagging_fraction': 0.95,
-            'bagging_freq': 5,
-            'metric_freq': 10
+            'num_iterations': 100,
+            'learning_rate': 0.01,
+            'num_leaves': 50,
+            'min_data_in_leaf': 8,
+            'feature_fraction': 0.2,
+            'bagging_fraction': 0.3,
+            'bagging_freq': 20,
+            'metric_freq': 10,
+            'metric': 'l1',
         }),
     },
 
@@ -1317,7 +1380,7 @@ presets = {
         }),
     },
 
-    'lgb-ce': {
+    'lgb-ce-1': {
         'features': ['numeric'],
         'feature_builders': [
             CategoricalAlphaEncoded(
@@ -1327,15 +1390,37 @@ presets = {
         'n_bags': 8,
         'model': LightGBM({
             'application': 'regression_fair',
-            'num_iterations': 8350,
-            'learning_rate': 0.006,
+            'num_iterations': 9350,
+            'learning_rate': 0.003,
             'num_leaves': 250,
             'min_data_in_leaf': 2,
             'feature_fraction': 0.25,
             'bagging_fraction': 0.95,
             'bagging_freq': 5,
             'metric': 'l1',
-            'metric_freq': 10
+            'metric_freq': 40
+        }),
+    },
+
+    'lgb-ce-2': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13')]
+            )],
+        'y_transform': y_pow(0.25),
+        'n_bags': 4,
+        'model': LightGBM({
+            'application': 'regression_fair',
+            'num_iterations': 8000,
+            'learning_rate': 0.005,
+            'num_leaves': 250,
+            'min_data_in_leaf': 2,
+            'feature_fraction': 0.25,
+            'bagging_fraction': 0.95,
+            'bagging_freq': 5,
+            'metric': 'l1',
+            'metric_freq': 40
         }),
     },
 
@@ -1404,6 +1489,13 @@ presets = {
         'model': Keras(nn_mlp_2, lambda: {'n_epoch': 55, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.25, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False),
     },
 
+    'nn-cd-4': {
+        'features': ['numeric_scaled', 'categorical_dummy'],
+        'y_transform': y_log_ofs(500),
+        'n_bags': 4,
+        'model': Keras(nn_mlp_2, lambda: {'n_epoch': 55, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.25, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False),
+    },
+
     'nn-cd-clrbf': {
         'features': ['numeric_scaled', 'categorical_dummy', 'cluster_rbf_200'],
         'y_transform': y_log_ofs(200),
@@ -1452,45 +1544,6 @@ presets = {
         'model': Keras(nn_mlp_2, lambda: {'n_epoch': 55, 'batch_size': 128, 'layers': [400, 200, 70], 'dropouts': [0.5, 0.3, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False),
     },
 
-    'nn-cd-clrbf-tst-2': {
-        'features': ['numeric_scaled', 'categorical_dummy', 'cluster_rbf_25', 'cluster_rbf_50', 'cluster_rbf_75', 'cluster_rbf_100'],
-        'n_bags': 4,
-        'model': Keras(nn_mlp_2, lambda: {'l1': 1e-5, 'n_epoch': 100, 'batch_size': 128, 'layers': [400, 200, 200], 'dropouts': [0.4, 0.4, 0.3], 'batch_norm': True, 'optimizer': SGD(3e-3, momentum=0.8, nesterov=True, decay=2e-4), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False),  # Adam(decay=1e-6)
-    },
-
-    'nn-cd-tst': {
-        'features': ['numeric_scaled', 'categorical_dummy'],
-        'y_transform': y_log_ofs(200),
-        'n_bags': 2,
-        'model': Keras(nn_mlp_2, lambda: {'n_epoch': 100, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.25, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False), # SGD(1e-3, momentum=0.9, nesterov=True, decay=1e-6)
-    },
-
-    'nn-cd-tst-2': {
-        'features': ['numeric_scaled', 'numeric_edges', 'categorical_dummy', 'cluster_rbf_50'],
-        'y_transform': y_log_ofs(200),
-        'n_bags': 4,
-        'model': Keras(nn_mlp_2, lambda: {'n_epoch': 100, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.25, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False),
-    },
-
-    'nn-cd-lr': {
-        'features': ['numeric_scaled', 'categorical_dummy'],
-        'y_transform': y_log_ofs(200),
-        #'n_bags': 2,
-        'model': Keras(nn_lr, lambda: {'n_epoch': 3, 'batch_size': 128, 'layers': [], 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False),
-    },
-
-    'nn-cm-tst': {
-        'features': ['numeric',  'cluster_rbf_50'],
-        'feature_builders': [
-            CategoricalMeanEncoded(
-                C=1000, noisy=False, loo=False,
-                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13'), ('cat79', 'cat81'), ('cat81', 'cat13'), ('cat9', 'cat73'), ('cat2', 'cat81'), ('cat80', 'cat111'), ('cat79', 'cat111'), ('cat72', 'cat1'), ('cat23', 'cat103'), ('cat89', 'cat13'), ('cat57', 'cat14'), ('cat80', 'cat81'), ('cat81', 'cat11'), ('cat9', 'cat103'), ('cat23', 'cat36')]
-            )],
-        'y_transform': y_log_ofs(200),
-        'n_bags': 4,
-        'model': Keras(nn_mlp_2, lambda: {'n_epoch': 70, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.25, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=True),
-    },
-
     'nn-svd': {
         'features': ['svd'],
         'n_bags': 2,
@@ -1504,8 +1557,8 @@ presets = {
         'model': Keras(nn_mlp_2, lambda: {'l1': 1e-7, 'l2': 1e-7, 'n_epoch': 55, 'batch_size': 128, 'layers': [400, 200, 50], 'dropouts': [0.4, 0.2, 0.2], 'batch_norm': True, 'optimizer': Adadelta(), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False),
     },
 
-    'nn-svd-cd-clrbf': {
-        'features': ['svd', 'categorical_dummy', 'cluster_rbf_50', 'cluster_rbf_100'],
+    'nn-svd-cd-clrbf-1': {
+        'features': ['svd', 'categorical_dummy', 'cluster_rbf_25', 'cluster_rbf_50', 'cluster_rbf_75'],
         'y_transform': y_log_ofs(200),
         'n_bags': 4,
         'model': Keras(nn_mlp_2, lambda: {'l1': 1e-6, 'n_epoch': 70, 'batch_size': 128, 'layers': [400, 150, 60], 'dropouts': [0.4, 0.25, 0.25], 'batch_norm': True, 'optimizer': Adam(decay=1e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False),
@@ -1515,6 +1568,13 @@ presets = {
         'features': ['svd', 'categorical_dummy', 'cluster_rbf_25', 'cluster_rbf_50', 'cluster_rbf_75', 'cluster_rbf_100'],
         'n_bags': 4,
         'model': Keras(nn_mlp_2, lambda: {'l1': 1e-5, 'n_epoch': 45, 'batch_size': 128, 'layers': [400, 200, 200], 'dropouts': [0.4, 0.4, 0.3], 'batch_norm': True, 'optimizer': SGD(3e-3, momentum=0.8, nesterov=True, decay=2e-4), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False),  # Adam(decay=1e-6)
+    },
+
+    'nn-svd-cd-clrbf-3': {
+        'features': ['svd', 'categorical_dummy', 'cluster_rbf_25', 'cluster_rbf_50', 'cluster_rbf_75'],
+        'y_transform': y_pow(0.25),
+        'n_bags': 4,
+        'model': Keras(nn_mlp_2, lambda: {'l1': 1e-6, 'n_epoch': 60, 'batch_size': 128, 'layers': [400, 150, 60], 'dropouts': [0.4, 0.25, 0.25], 'batch_norm': True, 'optimizer': Adam(decay=1e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}, scale=False),
     },
 
     'nn-cm-tst': {
@@ -1539,13 +1599,13 @@ presets = {
     'et-ce': {
         'features': ['numeric', 'categorical_encoded'],
         'y_transform': y_log,
-        'model': Sklearn(ExtraTreesRegressor(50, max_features=0.2, n_jobs=-1)),
+        'model': Sklearn(ExtraTreesRegressor(200, max_features=0.2, n_jobs=-1)),
     },
 
     'et-ce-2': {
         'features': ['numeric', 'categorical_encoded'],
         'y_transform': y_log_ofs(200),
-        'model': Sklearn(ExtraTreesRegressor(50, max_features=0.2, n_jobs=-1)),
+        'model': Sklearn(ExtraTreesRegressor(200, max_features=0.2, n_jobs=-1)),
     },
 
     'et-ce-3': {
@@ -1565,10 +1625,15 @@ presets = {
         'param_grid': {'min_samples_leaf': (2, 40), 'max_features': (0.05, 0.95), 'max_depth': (5, 40)},
     },
 
-    'rf-ce': {
-        'features': ['numeric', 'categorical_encoded'],
-        'y_transform': y_log,
-        'model': Sklearn(RandomForestRegressor(100, max_features=0.2, n_jobs=-1)),
+    'et-ce-5': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13')]
+            )],
+        'y_transform': y_pow(0.25),
+        'model': Sklearn(ExtraTreesRegressor(400, max_features=0.623,  max_depth=29, min_samples_leaf=4, n_jobs=-1)),
+        'param_grid': {'min_samples_leaf': (2, 40), 'max_features': (0.05, 0.95), 'max_depth': (5, 40)},
     },
 
     'rf-ce-2': {
@@ -1588,18 +1653,29 @@ presets = {
         'param_grid': {'min_samples_leaf': (2, 40), 'max_features': (0.05, 0.95), 'max_depth': (5, 40)},
     },
 
-    'rf-ce-rot': {
+    'rf-ce-4': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13')]
+            )],
+        'y_transform': y_pow(0.25),
+        'model': Sklearn(RandomForestRegressor(400, max_features=0.62, max_depth=39, min_samples_leaf=5, n_jobs=-1)),
+        'param_grid': {'min_samples_leaf': (2, 40), 'max_features': (0.05, 0.95), 'max_depth': (5, 40)},
+    },
+
+    'rf-ce-rot-1': {
         'features': ['numeric'],
         'feature_builders': [
             CategoricalAlphaEncoded(
                 combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13')]
             )],
         'y_transform': y_log_ofs(200),
-        'n_bags': 15,
-        'sample': 0.8,
-        'feature_sample': 0.8,
-        'svd': 30,
-        'model': Sklearn(RandomForestRegressor(20, max_features=0.62, max_depth=39, min_samples_leaf=5, n_jobs=-1)),
+        'n_bags': 20,
+        'sample': 0.9,
+        'feature_sample': 0.9,
+        'svd': 50,
+        'model': Sklearn(RandomForestRegressor(30, max_features=0.7, max_depth=39, min_samples_leaf=5, n_jobs=-1)),
         'param_grid': {'min_samples_leaf': (2, 40), 'max_features': (0.05, 0.95), 'max_depth': (5, 40)},
     },
 
@@ -1713,25 +1789,58 @@ presets = {
     'l2-nn': {
         'predictions': l1_predictions,
         'n_bags': 4,
-        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'layers': [50], 'dropouts': [0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}), # ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3),
+        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'layers': [50], 'dropouts': [0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}),
     },
 
     'l2-nn-2': {
         'predictions': l1_predictions,
         'n_bags': 6,
-        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 40, 'batch_size': 128, 'layers': [200, 50], 'dropouts': [0.15, 0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': []}), # ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3)
+        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 40, 'batch_size': 128, 'layers': [200, 50], 'dropouts': [0.15, 0.1], 'optimizer': SGD(1e-3, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}),
     },
 
     'l2-nn-3': {
         'predictions': l1_predictions,
         'n_bags': 4,
-        'model': Keras(nn_mlp, lambda: {'l1': 3e-6, 'l2': 3e-6, 'n_epoch': 70, 'batch_size': 128, 'layers': [200, 100], 'dropouts': [0.15, 0.15], 'optimizer': SGD(1e-4, momentum=0.9, nesterov=True, decay=3e-5), 'callbacks': []}), # ReduceLROnPlateau(patience=5, factor=0.2, cooldown=3)
+        'model': Keras(nn_mlp, lambda: {'l1': 3e-6, 'l2': 3e-6, 'n_epoch': 70, 'batch_size': 128, 'layers': [200, 100], 'dropouts': [0.15, 0.15], 'optimizer': SGD(1e-4, momentum=0.9, nesterov=True, decay=3e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}),
+    },
+
+    'l2-nn-4': {
+        'predictions': l1_predictions,
+        'n_bags': 6,
+        'model': Keras(nn_mlp, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'layers': [200, 50], 'dropouts': [0.15, 0.1], 'optimizer': SGD(1e-4, momentum=0.8, nesterov=True, decay=1e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}),
+    },
+
+    'l2-nn-5': {
+        'predictions': l1_predictions,
+        'n_bags': 4,
+        'model': Keras(nn_mlp, lambda: {'l1': 3e-6, 'l2': 3e-6, 'n_epoch': 50, 'batch_size': 128, 'layers': [200, 100], 'dropouts': [0.15, 0.15], 'optimizer': SGD(1e-4, momentum=0.9, nesterov=True, decay=5e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}),
+    },
+
+    'l2-nn-6': {
+        'predictions': l1_predictions,
+        'powers': [1.015, 1.03],
+        'n_bags': 4,
+        'model': Keras(nn_mlp, lambda: {'l1': 3e-6, 'l2': 3e-6, 'n_epoch': 50, 'batch_size': 128, 'layers': [200, 100], 'dropouts': [0.15, 0.15], 'optimizer': SGD(1e-4, momentum=0.9, nesterov=True, decay=5e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}),
     },
 
     'l2-lr': {
         'predictions': l1_predictions,
         'prediction_transform': lambda x: np.log(x+200),
         'y_transform': y_log_ofs(200),
+        'model': Sklearn(Ridge()),
+    },
+
+    'l2-lr-2': {
+        'predictions': l1_predictions,
+        'prediction_transform': lambda x: x ** 0.25,
+        'y_transform': y_pow(0.25),
+        'model': Sklearn(Ridge()),
+    },
+
+    'l2-lr-3': {
+        'predictions': l1_predictions,
+        'prediction_transform': lambda x: (x+5) ** 0.2,
+        'y_transform': y_pow_ofs(0.2, 5),
         'model': Sklearn(Ridge()),
     },
 
@@ -1781,22 +1890,39 @@ presets = {
         'param_grid': {'max_depth': (3, 7), 'min_child_weight': (1, 20), 'lambda': (0, 2.0), 'alpha': (0, 2.0), 'subsample': (0.5, 1.0)},
     },
 
+    'l2-xgbf-4': {
+        'features': ['manual'],
+        'predictions': l1_predictions,
+        'n_bags': 4,
+        'model': Xgb({
+            'max_depth': 3,
+            'eta': 0.005,
+            'colsample_bytree': 0.3,
+            'subsample': 0.55,
+            'min_child_weight': 3,
+            'lambda': 1.5,
+            'alpha': 1.3,
+        }, n_iter=5000, fair=150),
+        'param_grid': {'max_depth': (3, 7), 'min_child_weight': (1, 20), 'lambda': (0, 2.0), 'alpha': (0, 2.0), 'subsample': (0.5, 1.0)},
+    },
+
     'l2-et': {
         'predictions': l1_predictions,
-        'y_transform': y_log_ofs(200),
+        'y_transform': y_pow_ofs(0.2, 5),
         'model': Sklearn(ExtraTreesRegressor(100, max_depth=11, max_features=0.8, n_jobs=-1)),
         'param_grid': {'min_samples_leaf': (1, 40), 'max_features': (0.05, 0.8), 'max_depth': (3, 20)},
     },
 
     'l2-rf': {
         'predictions': l1_predictions,
-        'y_transform': y_log_ofs(200),
+        'y_transform': y_pow_ofs(0.2, 5),
         'model': Sklearn(RandomForestRegressor(100, max_depth=9, max_features=0.8, min_samples_leaf=23, n_jobs=-1)),
         'param_grid': {'min_samples_leaf': (1, 40), 'max_features': (0.05, 0.8), 'max_depth': (3, 20)},
     },
 
     'l2-gb': {
         'predictions': l1_predictions,
+        'n_bags': 2,
         'model': Sklearn(GradientBoostingRegressor(loss='lad', n_estimators=425, learning_rate=0.05, subsample=0.65, min_samples_leaf=9, max_depth=5, max_features=0.35)),
         'param_grid': {'n_estimators': (200, 500), 'max_depth': (1, 8), 'max_features': (0.1, 0.8), 'min_samples_leaf': (1, 20), 'subsample': (0.5, 1.0), 'learning_rate': (0.01, 0.3)},
     },
@@ -1849,6 +1975,15 @@ presets = {
         'agg': np.mean,
     },
 
+    'l3-qr-foldavg': {
+        'predictions': l2_predictions,
+        'predictions_mode': 'foldavg',
+        'model': QuantileRegression(),
+        'agg': np.mean,
+        'sample': 0.8,
+        'n_bags': 4,
+    },
+
     'l3-qr-2': {
         'predictions': l2_predictions,
         'model': QuantileRegression(),
@@ -1865,6 +2000,35 @@ presets = {
         'feature_sample': 0.9,
         'svd': 10,
         'n_bags': 6,
+    },
+
+    'l3-qr-4': {
+        'predictions': l2_predictions,
+        'model': QuantileRegression(),
+        'agg': np.mean,
+        'sample': 0.95,
+        'feature_sample': 0.9,
+        'svd': 12,
+        'powers': [1.023, 1.03],
+        'n_bags': 6,
+    },
+
+    'l3-xgbf': {
+        'predictions': l2_predictions,
+        'n_bags': 4,
+        'model': Xgb({
+            'max_depth': 5,
+            'eta': 0.005,
+            'colsample_bytree': 0.3,
+            'subsample': 0.55,
+            'min_child_weight': 3,
+        }, n_iter=5000, fair=50),
+    },
+
+    'l3-nn': {
+        'predictions': l2_predictions,
+        'n_bags': 4,
+        'model': Keras(nn_lr, lambda: {'l1': 1e-5, 'l2': 1e-5, 'n_epoch': 30, 'batch_size': 128, 'optimizer': SGD(3e-2, momentum=0.8, nesterov=True, decay=3e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}),
     },
 }
 
@@ -1921,6 +2085,12 @@ test_x = load_x('test', preset)
 test_r = Dataset.load('test', parts=np.unique([b.requirements for b in feature_builders]))
 test_foldavg_p = np.zeros((test_x.shape[0], n_splits * n_bags * n_folds))
 test_fulltrain_p = np.zeros((test_x.shape[0], n_bags))
+
+if 'powers' in preset:
+    print "Adding power features..."
+
+    train_x, feature_names = add_powers(train_x, feature_names, preset['powers'])
+    test_x = add_powers(test_x, feature_names, preset['powers'])[0]
 
 maes = []
 
@@ -2002,7 +2172,8 @@ for split in xrange(n_splits):
                                                  test=(bag_test_x, ),
                                                  seed=42 + 11*split + 17*fold + 13*bag,
                                                  feature_names=fold_feature_names,
-                                                 eval_func=lambda yt, yp: mean_absolute_error(y_inv_transform(yt), y_inv_transform(yp)))
+                                                 eval_func=lambda yt, yp: mean_absolute_error(y_inv_transform(yt), y_inv_transform(yp)),
+                                                 name='%s-fold-%d-%d' % (args.preset, fold, bag))
 
             eval_p[:, bag] += pe
             test_foldavg_p[:, split * n_folds * n_bags + fold * n_bags + bag] = pt
@@ -2080,7 +2251,8 @@ if True:
                                          seed=42 + 11*split + 17*fold + 13*bag,
                                          feature_names=fold_feature_names,
                                          eval_func=lambda yt, yp: mean_absolute_error(y_inv_transform(yt), y_inv_transform(yp)),
-                                         size_mult=n_folds / (n_folds - 1.0))
+                                         size_mult=n_folds / (n_folds - 1.0),
+                                         name='%s-full-%d' % (args.preset, bag))
 
         test_fulltrain_p[:, bag] = pt
 
