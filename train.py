@@ -777,20 +777,20 @@ l1_predictions = [
 ]
 
 l2_predictions = [
-    [
+    ([
         '20161209-2249-l2-knn-1128.69039',
         '20161209-2321-l2-svd-knn-1128.60543',
 
         '20161203-0232-l2-knn-1128.52203',
         '20161203-0135-l2-svd-knn-1128.44971',
         '20161130-0230-l2-svd-svr-1128.15513',
-    ],
+    ], {'power': 1.05}),
 
-    [
+    ([
         '20161210-2219-l2-lr-1119.94373',
         '20161210-2219-l2-lr-2-1118.49848',
         '20161210-2220-l2-lr-3-1118.45564',
-    ],
+    ], {'power': 1.03}),
 
     [
         '20161205-0025-l2-qr-1117.03435',
@@ -801,24 +801,26 @@ l2_predictions = [
     [
         '20161209-2101-l2-gb-1117.93768',
         '20161202-0020-l2-gb-1118.40560',
+        '20161211-1858-l2-gb-1117.60834',
+        '20161211-2153-l2-gb-2-1117.41247',
     ],
 
-    [
+    ([
         '20161125-0753-l2-xgbf-1119.04996',
         '20161130-0258-l2-xgbf-1118.96658', #
         '20161202-0702-l2-xgbf-1118.63437', #
         '20161203-0636-l2-xgbf-1118.58470', #
         '20161210-0712-l2-xgbf-1118.33470',
-    ],
+    ], {'power': 1.02}),
 
-    [
+    ([
         '20161202-1724-l2-xgbf-2-1118.43083',
         '20161210-1952-l2-xgbf-2-1118.15322',
 
         '20161130-2133-l2-xgbf-3-1118.75364', #
         '20161203-1336-l2-xgbf-3-1118.46005', #
         '20161211-0607-l2-xgbf-3-1118.16984',
-    ],
+    ], {'power': 1.02}),
 
     [
         '20161129-1219-l2-nn-1117.84214', #
@@ -839,9 +841,18 @@ l2_predictions = [
 
     [
         '20161210-0302-l2-nn-3-1116.53105',
-
+        '20161212-1230-l2-nn-3-1116.40752',
         '20161208-1708-l2-nn-5-1116.86086',
         '20161210-0624-l2-nn-5-1116.83111',
+        '20161211-1757-l2-nn-6-1116.60009',
+    ],
+
+    [
+        '20161211-1956-l2-xgbf-4-1118.39030',
+        '20161212-0519-l2-xgbf-4-2-1118.44814',
+        '20161212-1552-l2-xgbf-4-3-1118.46351',
+        '20161212-0959-l2-xgbf-5-1118.80387',
+        '20161212-1950-l2-xgbf-5-2-1118.46393',
     ]
 ]
 
@@ -1823,6 +1834,13 @@ presets = {
         'model': Keras(nn_mlp, lambda: {'l1': 3e-6, 'l2': 3e-6, 'n_epoch': 50, 'batch_size': 128, 'layers': [200, 100], 'dropouts': [0.15, 0.15], 'optimizer': SGD(1e-4, momentum=0.9, nesterov=True, decay=5e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}),
     },
 
+    'l2-nn-7': {
+        'predictions': l1_predictions,
+        'powers': [1.02, 1.04],
+        'n_bags': 4,
+        'model': Keras(nn_mlp, lambda: {'l1': 3e-6, 'l2': 3e-6, 'n_epoch': 70, 'batch_size': 128, 'layers': [200, 100], 'dropouts': [0.15, 0.15], 'optimizer': SGD(1e-4, momentum=0.9, nesterov=True, decay=5e-5), 'callbacks': [ExponentialMovingAverage(save_mv_ave_model=False)]}),
+    },
+
     'l2-lr': {
         'predictions': l1_predictions,
         'prediction_transform': lambda x: np.log(x+200),
@@ -1906,6 +1924,78 @@ presets = {
         'param_grid': {'max_depth': (3, 7), 'min_child_weight': (1, 20), 'lambda': (0, 2.0), 'alpha': (0, 2.0), 'subsample': (0.5, 1.0)},
     },
 
+    'l2-xgbf-4-2': {
+        'features': ['manual'],
+        'predictions': l1_predictions,
+        'n_bags': 4,
+        'model': Xgb({
+            'max_depth': 3,
+            'eta': 0.005,
+            'colsample_bytree': 0.3,
+            'subsample': 0.55,
+            'min_child_weight': 3,
+            'lambda': 1.5,
+            'alpha': 1.3,
+        }, n_iter=5000, fair=100),
+        'param_grid': {'max_depth': (3, 7), 'min_child_weight': (1, 20), 'lambda': (0, 2.0), 'alpha': (0, 2.0), 'subsample': (0.5, 1.0)},
+    },
+
+    'l2-xgbf-4-3': {
+        'features': ['manual'],
+        'predictions': l1_predictions,
+        'n_bags': 4,
+        'model': Xgb({
+            'max_depth': 3,
+            'eta': 0.005,
+            'colsample_bytree': 0.3,
+            'subsample': 0.55,
+            'min_child_weight': 3,
+            'lambda': 1.5,
+            'alpha': 1.3,
+        }, n_iter=5000, fair=200),
+        'param_grid': {'max_depth': (3, 7), 'min_child_weight': (1, 20), 'lambda': (0, 2.0), 'alpha': (0, 2.0), 'subsample': (0.5, 1.0)},
+    },
+
+    'l2-xgbf-5': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13'), ('cat79', 'cat81'), ('cat81', 'cat13'), ('cat9', 'cat73'), ('cat2', 'cat81'), ('cat80', 'cat111'), ('cat79', 'cat111'), ('cat72', 'cat1'), ('cat23', 'cat103'), ('cat89', 'cat13'), ('cat57', 'cat14'), ('cat80', 'cat81'), ('cat81', 'cat11'), ('cat9', 'cat103'), ('cat23', 'cat36')]
+            )],
+        'predictions': l1_predictions,
+        'n_bags': 7,
+        'model': Xgb({
+            'max_depth': 4,
+            'eta': 0.003,
+            'colsample_bytree': 0.4,
+            'subsample': 0.55,
+            'min_child_weight': 3,
+            'lambda': 3.0,
+            'alpha': 3.5,
+        }, n_iter=5000, fair=150),
+        'param_grid': {'max_depth': (3, 7), 'min_child_weight': (1, 20), 'lambda': (0, 2.0), 'alpha': (0, 2.0), 'subsample': (0.5, 1.0)},
+    },
+
+    'l2-xgbf-5-2': {
+        'features': ['numeric'],
+        'feature_builders': [
+            CategoricalAlphaEncoded(
+                combinations=[('cat103', 'cat111'), ('cat2', 'cat6'), ('cat87', 'cat11'), ('cat103', 'cat4'), ('cat80', 'cat103'), ('cat73', 'cat82'), ('cat12', 'cat72'), ('cat80', 'cat12'), ('cat111', 'cat5'), ('cat2', 'cat111'), ('cat80', 'cat57'), ('cat80', 'cat79'), ('cat1', 'cat82'), ('cat11', 'cat13'), ('cat79', 'cat81'), ('cat81', 'cat13'), ('cat9', 'cat73'), ('cat2', 'cat81'), ('cat80', 'cat111'), ('cat79', 'cat111'), ('cat72', 'cat1'), ('cat23', 'cat103'), ('cat89', 'cat13'), ('cat57', 'cat14'), ('cat80', 'cat81'), ('cat81', 'cat11'), ('cat9', 'cat103'), ('cat23', 'cat36')]
+            )],
+        'predictions': l1_predictions,
+        'n_bags': 4,
+        'model': Xgb({
+            'max_depth': 4,
+            'eta': 0.003,
+            'colsample_bytree': 0.6,
+            'subsample': 0.8,
+            'min_child_weight': 3,
+            'lambda': 3.0,
+            'alpha': 3.5,
+        }, n_iter=5000, fair=120),
+        'param_grid': {'max_depth': (3, 7), 'min_child_weight': (1, 20), 'lambda': (0, 2.0), 'alpha': (0, 2.0), 'subsample': (0.5, 1.0)},
+    },
+
     'l2-et': {
         'predictions': l1_predictions,
         'y_transform': y_pow_ofs(0.2, 5),
@@ -1924,6 +2014,13 @@ presets = {
         'predictions': l1_predictions,
         'n_bags': 2,
         'model': Sklearn(GradientBoostingRegressor(loss='lad', n_estimators=425, learning_rate=0.05, subsample=0.65, min_samples_leaf=9, max_depth=5, max_features=0.35)),
+        'param_grid': {'n_estimators': (200, 500), 'max_depth': (1, 8), 'max_features': (0.1, 0.8), 'min_samples_leaf': (1, 20), 'subsample': (0.5, 1.0), 'learning_rate': (0.01, 0.3)},
+    },
+
+    'l2-gb-2': {
+        'predictions': l1_predictions,
+        'n_bags': 4,
+        'model': Sklearn(GradientBoostingRegressor(loss='lad', n_estimators=425, learning_rate=0.04, subsample=0.65, min_samples_leaf=9, max_depth=5, max_features=0.35)),
         'param_grid': {'n_estimators': (200, 500), 'max_depth': (1, 8), 'max_features': (0.1, 0.8), 'min_samples_leaf': (1, 20), 'subsample': (0.5, 1.0), 'learning_rate': (0.01, 0.3)},
     },
 
@@ -1981,7 +2078,17 @@ presets = {
         'model': QuantileRegression(),
         'agg': np.mean,
         'sample': 0.8,
+        'n_bags': 8,
+    },
+
+    'l3-qr-foldavg-power': {
+        'predictions': l2_predictions,
+        'predictions_mode': 'foldavg',
+        'model': QuantileRegression(),
+        'agg': np.mean,
+        'sample': 0.8,
         'n_bags': 4,
+        'powers': [1.02],
     },
 
     'l3-qr-2': {

@@ -46,6 +46,14 @@ def load_csr(filename):
 
 
 def load_prediction(split, name, mode='fulltrain'):
+    if type(name) is tuple:
+        pred = load_prediction(split, name[0], mode)
+        opts = name[1]
+
+        if 'power' in opts:
+            pred = pred ** opts['power']
+
+        return pred
     if type(name) is list:
         preds = [load_prediction(split, n, mode) for n in name]
 
