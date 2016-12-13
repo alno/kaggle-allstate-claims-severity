@@ -1,15 +1,13 @@
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-import scipy.sparse as sp
 
 import argparse
 import os
 import datetime
 import itertools
 
-from math import sqrt
-from shutil import copy2, rmtree
+from shutil import copy2
 
 np.random.seed(1337)
 
@@ -25,15 +23,12 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.datasets import dump_svmlight_file
 from sklearn.utils import shuffle, resample
 
-from sklearn_util import MedianExtraTreesRegressor
-
 from keras.models import Sequential
-from keras.layers import Dense, MaxoutDense, Dropout, Lambda
+from keras.layers import Dense, Dropout
 from keras.layers.advanced_activations import PReLU
 from keras.layers.normalization import BatchNormalization
-from keras.optimizers import SGD, Adam, Nadam, Adadelta
-from keras.callbacks import ReduceLROnPlateau, LearningRateScheduler, ModelCheckpoint
-from keras import backend as K
+from keras.optimizers import SGD, Adam, Adadelta
+from keras.callbacks import ModelCheckpoint
 from keras import regularizers
 from keras_util import ExponentialMovingAverage, batch_generator
 
@@ -567,28 +562,6 @@ def nn_mlp_2(input_shape, params):
 
         if params.get('batch_norm', False):
             model.add(BatchNormalization())
-
-        if 'dropouts' in params:
-            model.add(Dropout(params['dropouts'][i]))
-
-    model.add(Dense(1, init='he_normal'))
-
-    return model
-
-
-def nn_maxout(input_shape, params):
-    model = Sequential()
-
-    for i, layer_size in enumerate(params['layers']):
-        reg = regularizer(params)
-
-        if i == 0:
-            model.add(MaxoutDense(layer_size, init='he_normal', W_regularizer=reg, input_shape=input_shape))
-        else:
-            model.add(MaxoutDense(layer_size, init='he_normal', W_regularizer=reg))
-
-#        if params.get('batch_norm', False):
-#            model.add(BatchNormalization())
 
         if 'dropouts' in params:
             model.add(Dropout(params['dropouts'][i]))
