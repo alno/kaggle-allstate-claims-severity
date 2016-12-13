@@ -1,3 +1,4 @@
 cache
 preds
+logs
 *.pyc
